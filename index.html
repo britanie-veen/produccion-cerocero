@@ -252,6 +252,10 @@
 /* ---------- 0) MOTOR (Apps Script) — de aquí la app LEE y GUARDA de verdad ---------- */
 const MOTOR_URL = "https://script.google.com/macros/s/AKfycby4ZUI7hIcSVVbqFN50OEXWlWJVD1SMLBkQ37aGXdoTZBMDzR0G-OEzMbND82ZxyPVXlA/exec";
 
+// ⭐ ADMINS = SOLO estas personas. Cualquiera que NO esté aquí es operador.
+// (Claudia NO es admin: es jefa de almacén, valida en Odoo, no supervisa desde la app.)
+const ADMINS = ["Britanie Ramos", "Karla González"];
+
 /* ---------- 1) DATOS DE EJEMPLO (mock) ---------- */
 // OPERADORES = personal de ALMACÉN (de COLABORADORES.xlsx, OF/AL="Almacén", sin duplicados).
 // ADMIN = Karla + Britanie. (Claudia NO está: valida en Odoo, no captura — ver requerimientos.)
@@ -267,8 +271,8 @@ const PERSONAS = [
     { nombre: "Ricardo Quevedo",       rol: "operador" },
     { nombre: "Rodrigo Quevedo",       rol: "operador" },
     { nombre: "Rodrigo Zamora",        rol: "operador" },
+    { nombre: "Claudia González",      rol: "operador" },
     { nombre: "Britanie Ramos",        rol: "admin" },
-    { nombre: "Claudia González",      rol: "admin" },
     { nombre: "Karla González",        rol: "admin" },
 ];
 
@@ -335,7 +339,9 @@ async function cargarPersonas() {
     try {
         const r = await fetch(MOTOR_URL + "?action=personas");
         const j = await r.json();
-        if (j.ok && j.personas && j.personas.length) PERSONAS = j.personas;
+        // El rol lo MANDA el código (ADMINS), no la hoja: así Claudia u otros nunca quedan admin por error.
+        if (j.ok && j.personas && j.personas.length)
+            PERSONAS = j.personas.map(p => ({ nombre: p.nombre, rol: ADMINS.includes(p.nombre) ? "admin" : "operador" }));
     } catch (e) { /* sin internet: usa la lista local */ }
 }
 // Leer lo producido HOY (registros, totales, ranking) del Sheet.
