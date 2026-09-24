@@ -250,14 +250,23 @@
    ================================================================= */
 
 /* ---------- 1) DATOS DE EJEMPLO (mock) ---------- */
+// OPERADORES = personal de ALMACÉN (de COLABORADORES.xlsx, OF/AL="Almacén", sin duplicados).
+// ADMIN = Karla + Britanie. (Claudia NO está: valida en Odoo, no captura — ver requerimientos.)
 const PERSONAS = [
-    { nombre: "Ricardo",     rol: "operador" },
-    { nombre: "Moisés",      rol: "operador" },
-    { nombre: "Litzy",       rol: "operador" },
-    { nombre: "Ángel",       rol: "operador" },
-    { nombre: "María Elena",  rol: "operador" },
-    { nombre: "Britanie (TI)", rol: "admin" },
-    { nombre: "Karla (Dir.)",  rol: "admin" },
+    { nombre: "Aarón Aragón",          rol: "operador" },
+    { nombre: "Alexander Tovar",       rol: "operador" },
+    { nombre: "Edwin Rojo",            rol: "operador" },
+    { nombre: "Luis Arturo Rodríguez", rol: "operador" },
+    { nombre: "Marco Guerrero",        rol: "operador" },
+    { nombre: "María Elena Vázquez",   rol: "operador" },
+    { nombre: "Miriam Parada",         rol: "operador" },
+    { nombre: "Raúl Huerta",           rol: "operador" },
+    { nombre: "Ricardo Quevedo",       rol: "operador" },
+    { nombre: "Rodrigo Quevedo",       rol: "operador" },
+    { nombre: "Rodrigo Zamora",        rol: "operador" },
+    { nombre: "Britanie Ramos",        rol: "admin" },
+    { nombre: "Claudia González",      rol: "admin" },
+    { nombre: "Karla González",        rol: "admin" },
 ];
 
 // Catálogo (en real: sale de Odoo, solo lectura). stock = piezas en Odoo.
@@ -305,7 +314,7 @@ let REGISTROS = [
 /* ---------- 2) ESTADO ---------- */
 let ESTADO = {
     usuario: null,      // { nombre, rol }
-    vista: "login",     // pantalla actual
+    vista: "bienvenida",// pantalla actual (arranca en la bienvenida)
     corte: "C1",        // corte seleccionado
     reg: { familia: "Tapetes", sku: null, cantidad: 1 }, // captura en curso
 };
@@ -350,22 +359,56 @@ function tabbar() {
    4) PANTALLAS
    ================================================================= */
 
+/* --- BIENVENIDA / SPLASH: primera pantalla al abrir --- */
+function vistaBienvenida() {
+    return `<div class="pantalla" style="text-align:center;align-items:center">
+        <div class="logo00" style="font-size:120px">00</div>
+        <h2 style="font-size:32px;margin-top:6px">Producción</h2>
+        <p class="sub" style="font-size:15px">Almacén CeroCero</p>
+        <div style="width:100%;max-width:280px;margin-top:38px">
+            <button class="btn" style="justify-content:center;font-size:16px" onclick="ir('login')">
+                Entrar <span class="flecha">→</span>
+            </button>
+        </div>
+        <div class="sello" style="margin-top:46px">CERO HUMO · CERO ATAJOS</div>
+    </div>`;
+}
+
 /* --- LOGIN: elegir tu nombre de la lista --- */
 function vistaLogin() {
-    return `<div class="pantalla">
-        <div class="logo00">00</div>
+    return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="logo00" style="font-size:64px">00</div>
         <h2>Producción</h2>
-        <p class="sub">Elige tu nombre para entrar</p>
-        <div style="margin-top:28px">
-            ${PERSONAS.map(p => `
-                <div class="persona" onclick="entrar('${p.nombre}')">
-                    <div class="avatar">${inicial(p.nombre)}</div>
-                    ${p.nombre}
-                    <span class="rol">${p.rol === "admin" ? "Admin" : ""}</span>
-                </div>`).join("")}
-        </div>
+        <p class="sub">Busca y elige tu nombre</p>
+        <input id="buscar" class="selbox" placeholder="🔍  Toca aquí y busca tu nombre…" onfocus="abrirLista()"
+               oninput="filtrarPersonas()" autocomplete="off" autocorrect="off" style="margin-top:20px">
+        <div id="listaPersonas" style="display:none;max-height:46vh;overflow-y:auto;padding-right:2px"></div>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </div>`;
+}
+/* Dibuja la lista de personas: alfabética + filtrada por lo que se escribe */
+function personasHTML(filtro) {
+    const f = (filtro || "").trim().toLowerCase();
+    const lista = [...PERSONAS]
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+        .filter(p => p.nombre.toLowerCase().includes(f));
+    if (!lista.length) return `<p class="vacio">Sin resultados…</p>`;
+    return lista.map(p => `
+        <div class="persona" onclick="entrar('${p.nombre}')">
+            <div class="avatar">${inicial(p.nombre)}</div>
+            ${p.nombre}
+            <span class="rol">${p.rol === "admin" ? "Admin" : ""}</span>
+        </div>`).join("");
+}
+function abrirLista() {
+    const l = document.getElementById("listaPersonas");
+    l.style.display = "block";
+    if (!l.innerHTML.trim()) l.innerHTML = personasHTML("");
+}
+function filtrarPersonas() {
+    const l = document.getElementById("listaPersonas");
+    l.style.display = "block";
+    l.innerHTML = personasHTML(document.getElementById("buscar").value);
 }
 function entrar(nombre) {
     const p = PERSONAS.find(x => x.nombre === nombre);
@@ -607,6 +650,7 @@ function vistaAdminRanking(){
    ================================================================= */
 function render() {
     const vistas = {
+        bienvenida: vistaBienvenida,
         login: vistaLogin, home: vistaHome, producir: vistaProducir, escanear: vistaEscanear,
         pendientes: vistaPendientes, historial: vistaHistorial,
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking,

@@ -1,6 +1,6 @@
 /* Service Worker — hace que la app se pueda "instalar" y abrir sin internet.
    Guarda una copia de los archivos base en el teléfono (caché). */
-const CACHE = 'produccion-cerocero-v1';
+const CACHE = 'produccion-cerocero-v2';
 const ARCHIVOS = [
   './',
   './index.html',
@@ -22,6 +22,15 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Primero busca en caché; si no está, va a internet.
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+  const req = e.request;
+  // La PÁGINA (navegación): primero internet (para ver cambios al instante); si no hay, la caché.
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req).then(r => { const copia = r.clone(); caches.open(CACHE).then(c => c.put(req, copia)); return r; })
+        .catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
+    );
+    return;
+  }
+  // Lo demás (iconos, etc.): primero caché, si no, internet.
+  e.respondWith(caches.match(req).then(r => r || fetch(req)));
 });
