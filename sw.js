@@ -1,6 +1,6 @@
 /* Service Worker — hace que la app se pueda "instalar" y abrir sin internet.
    Guarda una copia de los archivos base en el teléfono (caché). */
-const CACHE = 'produccion-cerocero-v2';
+const CACHE = 'produccion-cerocero-v3';
 const ARCHIVOS = [
   './',
   './index.html',

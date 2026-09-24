@@ -249,6 +249,9 @@
    Datos de EJEMPLO. En Fase 2 se reemplazan por Odoo + Sheet (Apps Script).
    ================================================================= */
 
+/* ---------- 0) MOTOR (Apps Script) — de aquí la app LEE y GUARDA de verdad ---------- */
+const MOTOR_URL = "https://script.google.com/macros/s/AKfycbyFA9w88K75BfSLnxWtrFC1cJRliSJpidbkl2wOaskuoPFzcVQ-svpz_3gX6_5dXFpV/exec";
+
 /* ---------- 1) DATOS DE EJEMPLO (mock) ---------- */
 // OPERADORES = personal de ALMACÉN (de COLABORADORES.xlsx, OF/AL="Almacén", sin duplicados).
 // ADMIN = Karla + Britanie. (Claudia NO está: valida en Odoo, no captura — ver requerimientos.)
@@ -303,13 +306,7 @@ const FULL = [
 ];
 
 // Registros de producción del día (se van llenando al capturar). hora en texto.
-let REGISTROS = [
-    { persona: "Ricardo", sku: "MUK-TAP3MM-NEG", cantidad: 25, hora: "08:20" },
-    { persona: "Moisés",  sku: "MUK-PISO-TACHON-2x3", cantidad: 10, hora: "08:45" },
-    { persona: "Litzy",   sku: "MUK-TAP3MM-NEG", cantidad: 15, hora: "09:10" },
-    { persona: "Ricardo", sku: "MUK-TAP5MM-GRI", cantidad: 8,  hora: "09:30" },
-    { persona: "Ángel",   sku: "MUK-TAP3MM-LIL", cantidad: 12, hora: "10:05" },
-];
+let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
 
 /* ---------- 2) ESTADO ---------- */
 let ESTADO = {
@@ -331,6 +328,37 @@ function toast(msg) {
     setTimeout(() => t.classList.remove("show"), 1800);
 }
 function ir(vista) { ESTADO.vista = vista; render(); }
+
+/* ---------- 3b) CONEXIÓN CON EL MOTOR ---------- */
+// Leer la lista de personas del Sheet (si falla, usa la lista local de respaldo).
+async function cargarPersonas() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=personas");
+        const j = await r.json();
+        if (j.ok && j.personas && j.personas.length) PERSONAS = j.personas;
+    } catch (e) { /* sin internet: usa la lista local */ }
+}
+// Leer lo producido HOY (registros, totales, ranking) del Sheet.
+async function cargarResumen() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=resumen");
+        const j = await r.json();
+        if (j.ok) {
+            REGISTROS = (j.registrosHoy || []).map(x => ({
+                id: x.id, persona: x.persona, sku: x.sku, desc: x.desc,
+                familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora
+            }));
+        }
+    } catch (e) { /* sin internet: deja lo que haya */ }
+}
+// Enviar algo al motor (guardar / deshacer). no-cors: se ejecuta aunque no leamos la respuesta.
+async function enviarMotor(payload) {
+    await fetch(MOTOR_URL, {
+        method: "POST", mode: "no-cors",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload)
+    });
+}
 
 /* Encabezado de marca reutilizable */
 function header(titulo, sub) {
@@ -468,15 +496,18 @@ function vistaProducir() {
 }
 function setFamilia(f){ ESTADO.reg.familia=f; ESTADO.reg.sku=null; render(); }
 function paso(d){ ESTADO.reg.cantidad=Math.max(1, ESTADO.reg.cantidad+d); document.getElementById("valor").textContent=ESTADO.reg.cantidad; }
-function guardar(){
-    REGISTROS.push({ persona: ESTADO.usuario.nombre, sku: ESTADO.reg.sku, cantidad: ESTADO.reg.cantidad, hora: horaAhora() });
-    toast(`✓ ${ESTADO.reg.cantidad} pzs de ${prod(ESTADO.reg.sku).desc}`);
+async function guardar(){
+    const cant = ESTADO.reg.cantidad, sku = ESTADO.reg.sku;
+    toast("Guardando…");
+    try {
+        await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
+            sku: sku, desc: prod(sku).desc, familia: ESTADO.reg.familia, cantidad: cant });
+        await cargarResumen();               // vuelve a leer lo de hoy (ya con lo nuevo)
+        toast(`✓ ${cant} pzs de ${prod(sku).desc}`);
+    } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
     ESTADO.reg.cantidad = 1;
     ir("historial");
 }
-// hora fija de ejemplo (en real: la del momento). Evitamos depender del reloj para el prototipo.
-let _min = 10;
-function horaAhora(){ _min = (_min + 7) % 60; return "10:" + String(_min).padStart(2,"0"); }
 
 /* --- ESCANEAR (simulado) --- */
 function vistaEscanear(){
@@ -540,15 +571,20 @@ function vistaHistorial(){
             <div class="card" style="padding:12px 16px">
                 <div class="item" style="padding:0">
                     <div class="avatar" style="width:34px;height:34px;font-size:13px">${inicial(r.persona)}</div>
-                    <div><div class="sku">${prod(r.sku).desc} · ${r.cantidad} pzs</div>
+                    <div><div class="sku">${r.desc || prod(r.sku).desc} · ${r.cantidad} pzs</div>
                          <div class="desc">${r.persona} · <span class="hora">${r.hora}</span></div></div>
-                    <div class="cant" style="font-size:13px;color:var(--gris);cursor:pointer" onclick="deshacer(${REGISTROS.length-1-i})">Deshacer</div>
+                    <div class="cant" style="font-size:13px;color:var(--gris);cursor:pointer" onclick="deshacer('${r.id}')">Deshacer</div>
                 </div>
             </div>`).join("") : `<p class="vacio">Aún no hay registros hoy.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
-function deshacer(idx){ const r=REGISTROS[idx]; if(!r)return; REGISTROS.splice(idx,1); toast("Registro deshecho"); render(); }
+async function deshacer(id){
+    toast("Deshaciendo…");
+    try { await enviarMotor({ action: "deshacer", id: id }); await cargarResumen(); toast("Registro deshecho"); }
+    catch (e) { toast("No se pudo deshacer."); }
+    render();
+}
 
 /* =================================================================
    ADMIN (Britanie / Karla): ve el proceso de TODOS
@@ -659,7 +695,13 @@ function render() {
     $app.scrollTop = 0;
 }
 
-render(); // arranca la app
+render(); // arranca la app (pantalla de bienvenida, al instante)
+
+/* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
+(async () => {
+    await Promise.all([cargarPersonas(), cargarResumen()]);
+    render();
+})();
 
 /* Registrar el Service Worker → habilita "instalar en el teléfono" y modo sin internet */
 if ('serviceWorker' in navigator) {
