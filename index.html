@@ -35,21 +35,25 @@
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        html, body { height: 100%; }
         body {
             font-family: 'Montserrat', sans-serif;
             background-color: var(--fondo);
             color: var(--negro);
             display: flex;
             justify-content: center;
-            min-height: 100vh;
+            height: 100vh;
+            height: 100dvh;      /* dvh = alto real del celular (sin que la barra del navegador estorbe) */
+            overflow: hidden;    /* la PÁGINA no se mueve; solo scrollea el contenido de en medio */
         }
 
-        /* El "teléfono": en compu se ve como un cel; en cel ocupa toda la pantalla */
+        /* El "teléfono": marco FIJO de alto completo; header y barra quedan quietos, el centro scrollea */
         #app {
             width: 100%;
             max-width: 440px;
             background: var(--blanco);
-            min-height: 100vh;
+            height: 100vh;
+            height: 100dvh;
             position: relative;
             display: flex;
             flex-direction: column;
@@ -80,12 +84,21 @@
             border: 1px solid rgba(255,255,255,.35);
             padding: 5px 10px; border-radius: 20px;
         }
+        /* Flecha de regresar (aparece en pantallas que NO son de inicio) */
+        header .btn-atras {
+            background: none; border: none; color: var(--blanco);
+            font-size: 26px; font-weight: 900; line-height: 1; cursor: pointer;
+            font-family: inherit; padding: 0 2px 0 0;
+        }
+        header .btn-atras:active { opacity: .55; }
 
         /* ---------- Contenido ---------- */
         main {
             flex: 1;
-            padding: 20px 18px 90px;   /* espacio abajo para la barra de tabs */
+            min-height: 0;             /* CLAVE: deja que SOLO el centro scrollee dentro del marco fijo */
+            padding: 20px 18px 24px;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .seccion-titulo {
@@ -189,9 +202,9 @@
             margin-bottom: 12px; -webkit-appearance: none; appearance: none;
         }
 
-        /* Barra de tabs inferior */
+        /* Barra de tabs inferior — FIJA abajo (no se mueve al hacer scroll) */
         nav.tabbar {
-            position: absolute; bottom: 0; left: 0; right: 0;
+            flex-shrink: 0;            /* es hija del marco: se queda quieta, no se encoge */
             background: var(--blanco); border-top: 1px solid var(--linea);
             display: flex; padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
         }
@@ -213,7 +226,7 @@
         .aviso span { font-weight: 100; font-size: 13px; display: block; margin-top: 3px; opacity: .85; }
 
         /* Splash / login: pantalla BLANCA con detalles negros (identidad CeroCero) */
-        .pantalla { background: var(--blanco); color: var(--negro); min-height: 100vh;
+        .pantalla { background: var(--blanco); color: var(--negro); min-height: 100%; width: 100%; overflow-y: auto;
                     display: flex; flex-direction: column; justify-content: center; padding: 40px 26px; }
         .pantalla .logo00 { font-weight: 900; font-size: 90px; letter-spacing: -6px; line-height: .9; color: var(--negro); }
         .pantalla h2 { font-weight: 900; font-size: 24px; margin-top: 18px; }
@@ -276,38 +289,17 @@ const PERSONAS = [
     { nombre: "Karla González",        rol: "admin" },
 ];
 
-// Catálogo (en real: sale de Odoo, solo lectura). stock = piezas en Odoo.
-const PRODUCTOS = [
-    { sku: "MUK-TAP3MM-NEG", desc: "Tapete 3mm Negro",       familia: "Tapetes", stock: 120 },
-    { sku: "MUK-TAP3MM-LIL", desc: "Tapete 3mm Lila",        familia: "Tapetes", stock: 45  },
-    { sku: "MUK-TAP5MM-GRI", desc: "Tapete 5mm Gris",        familia: "Tapetes", stock: 8   },
-    { sku: "MUK-PISO-TACHON-2x3", desc: "Piso Tachón 2×3",   familia: "Pisos",   stock: 30  },
-    { sku: "MUK-PISO-TACHON-2x5", desc: "Piso Tachón 2×5",   familia: "Pisos",   stock: 4   },
-    { sku: "MUK-PISO-LISO-2x4",   desc: "Piso Liso 2×4",     familia: "Pisos",   stock: 16  },
-];
+// ⭐ MACHOTE de HOY (qué producir por corte) — se carga del motor (archivo de Sofi).
+//    cortes: { C1:[{sku,nombre,meta,familia}], C2:[...], C3:[...] }
+let MACHOTE = { fecha: "", archivo: "", esDeHoy: true, cortes: { C1: [], C2: [], C3: [] } };
 
-// Metas por CORTE (en real vienen del proyecto de Sofi: PRODUCCION C1/C2/C3)
-const CORTES = {
-    C1: [
-        { sku: "MUK-TAP3MM-NEG", meta: 40 },
-        { sku: "MUK-PISO-TACHON-2x3", meta: 15 },
-        { sku: "MUK-TAP5MM-GRI", meta: 20 },
-    ],
-    C2: [
-        { sku: "MUK-TAP3MM-LIL", meta: 25 },
-        { sku: "MUK-PISO-LISO-2x4", meta: 12 },
-    ],
-    C3: [
-        { sku: "MUK-PISO-TACHON-2x5", meta: 18 },
-    ],
-};
+// FULL pendientes por fecha límite — del motor (REGISTRO_ENVIOS.xlsx).
+//    cada uno: { envio, canal, entrega, entregaISO, piezas, piezasPendientes, skus }
+let FULL = [];
 
-// Pendientes FULL (en real: REGISTRO_ENVIOS.xlsx; "Entrega" = fecha límite)
-const FULL = [
-    { envio: "77677315", canal: "Mercado Libre Full", entrega: "Hoy 5:00 PM", total: 60, hecho: 42 },
-    { envio: "FBA19QN2ST3H", canal: "Amazon FBA", entrega: "Mañana", total: 120, hecho: 30 },
-    { envio: "77680022", canal: "Mercado Libre Full", entrega: "Vie 26 sep", total: 45, hecho: 0 },
-];
+// Remisiones de Colecta (S####) — del motor (Odoo). Para la vista "por remisión".
+//    cada una: { name, canal, fecha, lineas:[{sku,nombre,qty}] } (ordenadas FIFO, más antigua primero)
+let COLECTA = [];
 
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
@@ -316,22 +308,78 @@ let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
 let ESTADO = {
     usuario: null,      // { nombre, rol }
     vista: "bienvenida",// pantalla actual (arranca en la bienvenida)
+    hist: [],           // memoria de navegación: pantallas por las que pasé (para la flecha ←)
     corte: "C1",        // corte seleccionado
+    colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
     reg: { familia: "Tapetes", sku: null, cantidad: 1 }, // captura en curso
 };
 
 /* ---------- 3) HELPERS ---------- */
 const $app = document.getElementById("app");
-const prod = sku => PRODUCTOS.find(p => p.sku === sku) || { desc: sku, stock: 0 };
+// Nombre "bonito" de un SKU (lo busca en el machote de hoy).
+function prod(sku){
+    for (var c in MACHOTE.cortes){
+        var it = (MACHOTE.cortes[c] || []).find(function(x){ return x.sku === sku; });
+        if (it) return { desc: it.nombre, familia: it.familia };
+    }
+    return { desc: sku, familia: "" };
+}
+// Lista plana de SKUs del machote de hoy (deduplicada, meta sumada entre cortes).
+function machoteSKUs(familia){
+    var map = {};
+    ["C1","C2","C3"].forEach(function(c){
+        (MACHOTE.cortes[c] || []).forEach(function(it){
+            if (familia && it.familia !== familia) return;
+            if (!map[it.sku]) map[it.sku] = { sku: it.sku, nombre: it.nombre, familia: it.familia, meta: 0 };
+            map[it.sku].meta += it.meta;
+        });
+    });
+    return Object.keys(map).map(function(k){ return map[k]; }).sort(function(a,b){ return b.meta - a.meta; });
+}
 const inicial = n => n.trim()[0].toUpperCase();
 const producidoDe = sku => REGISTROS.filter(r => r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
 const totalHoy = () => REGISTROS.reduce((a, r) => a + r.cantidad, 0);
+
+// --- Fechas (para FULL) ---
+function fechaISOhoy(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
+    return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function fechaHoyArchivo(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
+    return p(d.getDate())+"-"+p(d.getMonth()+1)+"-"+d.getFullYear()+".xlsx"; }
+function fechaBonita(iso){
+    if (!iso) return "sin fecha";
+    if (iso === fechaISOhoy()) return "HOY";
+    const man=new Date(); man.setDate(man.getDate()+1); const p=n=>String(n).padStart(2,'0');
+    if (iso === man.getFullYear()+"-"+p(man.getMonth()+1)+"-"+p(man.getDate())) return "Mañana";
+    const pt=iso.split("-"); if (pt.length!==3) return iso;
+    const dias=["dom","lun","mar","mié","jue","vie","sáb"];
+    const meses=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+    const d=new Date(Number(pt[0]), Number(pt[1])-1, Number(pt[2]));
+    return dias[d.getDay()]+" "+Number(pt[2])+" "+meses[Number(pt[1])-1];
+}
+// Aviso cuando el machote NO es el de hoy (Sofi no lo ha subido todavía).
+function avisoMachote(){
+    if (MACHOTE.esDeHoy || !MACHOTE.archivo) return "";
+    const f = String(MACHOTE.archivo).replace(".xlsx","");
+    return `<div class="aviso" style="background:var(--blanco);color:var(--negro);border:2px solid var(--negro)">
+        <b>⚠️ Sofi no ha subido el machote de hoy</b>
+        <span style="color:var(--gris)">Estás viendo el último disponible (${f}).</span>
+    </div>`;
+}
 function toast(msg) {
     const t = document.getElementById("toast");
     t.textContent = msg; t.classList.add("show");
     setTimeout(() => t.classList.remove("show"), 1800);
 }
-function ir(vista) { ESTADO.vista = vista; render(); }
+// Pantallas "raíz" (de inicio): NO llevan flecha de atrás y reinician el historial.
+const RAICES = ["bienvenida", "login", "home", "adminPin", "adminPanel"];
+function ir(vista) {
+    if (ESTADO.vista && ESTADO.vista !== vista) ESTADO.hist.push(ESTADO.vista); // recuerda de dónde vengo
+    ESTADO.vista = vista;
+    render();
+}
+function atras() {                                   // la flecha ← regresa a la pantalla anterior
+    if (ESTADO.hist.length) { ESTADO.vista = ESTADO.hist.pop(); render(); }
+}
 
 /* ---------- 3b) CONEXIÓN CON EL MOTOR ---------- */
 // Leer la lista de personas del Sheet (si falla, usa la lista local de respaldo).
@@ -357,6 +405,30 @@ async function cargarResumen() {
         }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
+// Leer el MACHOTE de hoy (qué producir por corte) del motor.
+async function cargarMachote() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=machote");
+        const j = await r.json();
+        if (j && j.ok) { MACHOTE = j; MACHOTE.esDeHoy = (j.archivo === fechaHoyArchivo()); }
+    } catch (e) { /* sin internet: deja lo que haya */ }
+}
+// Leer los FULL pendientes (por fecha límite) del motor.
+async function cargarFull() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=pendientesFull");
+        const j = await r.json();
+        if (j && j.ok) FULL = j.envios || [];
+    } catch (e) { /* sin internet: deja lo que haya */ }
+}
+// Leer las remisiones de Colecta (Odoo) del motor.
+async function cargarColecta() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=pendientesColecta");
+        const j = await r.json();
+        if (j && j.ok) COLECTA = j.remisiones || [];
+    } catch (e) { /* sin internet: deja lo que haya */ }
+}
 // Enviar algo al motor (guardar / deshacer). no-cors: se ejecuta aunque no leamos la respuesta.
 async function enviarMotor(payload) {
     await fetch(MOTOR_URL, {
@@ -368,8 +440,13 @@ async function enviarMotor(payload) {
 
 /* Encabezado de marca reutilizable */
 function header(titulo, sub) {
+    // A la izquierda: la flecha ← si NO es pantalla de inicio y hay a dónde regresar; si no, el "00".
+    const mostrarAtras = !RAICES.includes(ESTADO.vista) && ESTADO.hist.length;
+    const izq = mostrarAtras
+        ? `<button class="btn-atras" onclick="atras()" aria-label="Atrás">←</button>`
+        : `<div class="marca-00">00</div>`;
     return `<header>
-        <div class="marca-00">00</div>
+        ${izq}
         <div class="titulo"><h1>${titulo}</h1><p>${sub || "Almacén CeroCero"}</p></div>
         ${ESTADO.usuario ? `<div class="usuario">${ESTADO.usuario.nombre.split(" ")[0]}</div>` : ""}
     </header>`;
@@ -454,23 +531,24 @@ function entrar(nombre) {
 /* --- HOME OPERADOR: "lo mío" --- */
 function vistaHome() {
     const miProd = REGISTROS.filter(r => r.persona === ESTADO.usuario.nombre).reduce((a, r) => a + r.cantidad, 0);
-    // "Por dónde empezar": el SKU con menos stock que además tenga meta hoy
-    const conMeta = Object.values(CORTES).flat().map(m => prod(m.sku)).sort((a, b) => a.stock - b.stock)[0];
+    // "Por dónde empezar": el SKU del machote con MÁS piezas pendientes (meta − producido)
+    let empieza = null, gapMax = 0;
+    machoteSKUs("").forEach(s => { const gap = s.meta - producidoDe(s.sku); if (gap > gapMax) { gapMax = gap; empieza = s; } });
     return header("Producción") + `<main>
-        <div class="aviso">
-            <b>Empieza por: ${conMeta.desc}</b>
-            <span>Es lo que tiene menos piezas en stock (${conMeta.stock} pzs).</span>
-        </div>
+        ${avisoMachote()}
+        ${empieza ? `<div class="aviso">
+            <b>Empieza por: ${empieza.nombre}</b>
+            <span>Faltan ${gapMax} de ${empieza.meta} pzs por producir hoy.</span>
+        </div>` : ``}
         <div class="card negra kpi">
             <div class="num">${miProd}</div>
             <div class="lbl">piezas que TÚ produjiste hoy</div>
         </div>
         <div class="fila-kpis">
             <div class="card kpi"><div class="num">${totalHoy()}</div><div class="lbl">total del equipo hoy</div></div>
-            <div class="card kpi"><div class="num">${FULL.filter(f=>f.hecho<f.total).length}</div><div class="lbl">envíos FULL pendientes</div></div>
+            <div class="card kpi"><div class="num">${FULL.length}</div><div class="lbl">envíos FULL por hacer</div></div>
         </div>
         <button class="btn" onclick="ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
-        <button class="btn blanco" onclick="ir('escanear')"><span class="ico">📷</span> Escanear etiqueta <span class="flecha">→</span></button>
         <button class="btn blanco" onclick="ir('pendientes')"><span class="ico">📋</span> Ver pendientes (Colecta / FULL) <span class="flecha">→</span></button>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
@@ -478,18 +556,32 @@ function vistaHome() {
 
 /* --- PRODUCIR: elegir producto + cantidad --- */
 function vistaProducir() {
-    const lista = PRODUCTOS.filter(p => p.familia === ESTADO.reg.familia);
-    if (!ESTADO.reg.sku || !lista.find(p => p.sku === ESTADO.reg.sku)) ESTADO.reg.sku = lista[0].sku;
-    return header("Registrar", "¿Qué produjiste?") + `<main>
-        <div class="seccion-titulo">Familia</div>
-        <div class="tabs">
+    const lista = machoteSKUs(ESTADO.reg.familia);
+    const tabsFam = `<div class="tabs">
             <button class="${ESTADO.reg.familia==='Tapetes'?'on':''}" onclick="setFamilia('Tapetes')">Tapetes</button>
             <button class="${ESTADO.reg.familia==='Pisos'?'on':''}" onclick="setFamilia('Pisos')">Pisos</button>
-        </div>
-        <div class="seccion-titulo">Producto (SKU)</div>
-        <select onchange="ESTADO.reg.sku=this.value">
-            ${lista.map(p => `<option value="${p.sku}" ${p.sku===ESTADO.reg.sku?'selected':''}>${p.desc} · ${p.sku}</option>`).join("")}
+        </div>`;
+    if (!lista.length) {
+        return header("Registrar", "¿Qué produjiste?") + `<main>
+            <div class="seccion-titulo">Familia</div>${tabsFam}
+            <p class="vacio">No hay ${ESTADO.reg.familia.toLowerCase()} en el machote de hoy.</p>
+            <div class="link" onclick="ir('home')">Volver</div>
+        </main>` + tabbar();
+    }
+    if (!ESTADO.reg.sku || !lista.find(p => p.sku === ESTADO.reg.sku)) ESTADO.reg.sku = lista[0].sku;
+    const sel = lista.find(p => p.sku === ESTADO.reg.sku);
+    const hecho = producidoDe(sel.sku);
+    const pct = Math.min(100, Math.round(hecho / sel.meta * 100));
+    return header("Registrar", "¿Qué produjiste?") + `<main>
+        <div class="seccion-titulo">Familia</div>${tabsFam}
+        <div class="seccion-titulo">Producto (SKU) <small>Del machote de hoy</small></div>
+        <select onchange="ESTADO.reg.sku=this.value;render()">
+            ${lista.map(p => `<option value="${p.sku}" ${p.sku===ESTADO.reg.sku?'selected':''}>${p.nombre} · ${p.sku}</option>`).join("")}
         </select>
+        <div class="card">
+            <div class="item" style="padding:0"><div class="desc">Meta de hoy para este SKU</div><div class="cant" style="font-size:18px">${hecho}/${sel.meta} pzs</div></div>
+            <div class="prog"><span style="width:${pct}%"></span></div>
+        </div>
         <div class="seccion-titulo">Cantidad de piezas</div>
         <div class="stepper">
             <button onclick="paso(-1)">−</button>
@@ -515,54 +607,145 @@ async function guardar(){
     ir("historial");
 }
 
-/* --- ESCANEAR (simulado) --- */
-function vistaEscanear(){
-    return header("Escanear", "Apunta al código del producto") + `<main>
-        <div class="card negra" style="text-align:center;padding:50px 20px">
-            <div style="font-size:60px">📷</div>
-            <p style="font-weight:100;margin-top:10px;opacity:.85">Cámara (se activa en el celular)</p>
-        </div>
-        <p class="vacio">En el celular, aquí se abre la cámara y lee el código de barras del producto (igual que el Scanner). Reconoce el SKU desde el catálogo de Odoo y prellena el registro.</p>
-        <button class="btn" onclick="simularEscaneo()"><span class="ico">✨</span> Simular lectura de una etiqueta <span class="flecha">→</span></button>
-        <div class="link" onclick="ir('home')">Volver</div>
-    </main>` + tabbar();
-}
-function simularEscaneo(){
-    ESTADO.reg = { familia: "Tapetes", sku: "MUK-TAP3MM-LIL", cantidad: 1 };
-    toast("✓ Reconocido: Tapete 3mm Lila");
-    ir("producir");
-}
-
 /* --- PENDIENTES: Colecta (por corte) + FULL --- */
 function vistaPendientes(){
-    const metas = CORTES[ESTADO.corte];
-    return header("Pendientes", "Colecta por corte y FULL") + `<main>
-        <div class="seccion-titulo">Colecta · por corte <small>Lo que hay que producir en este corte (proyecto de Sofi)</small></div>
+    const porRem = ESTADO.colectaVista === 'remision';
+    return header("Pendientes", "Colecta y FULL") + `<main>
+        ${avisoMachote()}
+        <div class="seccion-titulo">Colecta <small>${porRem ? 'Remisiones — se llenan conforme produces (más antigua primero)' : 'Lo que hay que producir (machote de Sofi)'}</small></div>
         <div class="tabs">
-            ${["C1","C2","C3"].map(c=>`<button class="${ESTADO.corte===c?'on':''}" onclick="ESTADO.corte='${c}';render()">${c}<small>${c==='C1'?'8–9h':c==='C2'?'9–12h':'12–17h'}</small></button>`).join("")}
+            <button class="${!porRem?'on':''}" onclick="ESTADO.colectaVista='sku';render()">Por SKU</button>
+            <button class="${porRem?'on':''}" onclick="ESTADO.colectaVista='remision';render()">Por remisión</button>
         </div>
-        ${metas.map(m=>{
-            const p = prod(m.sku); const hecho = Math.min(producidoDe(m.sku), m.meta);
-            const pct = Math.round(hecho/m.meta*100);
-            return `<div class="card">
-                <div class="item"><div><div class="sku">${p.desc}</div><div class="desc">${m.sku}</div></div>
-                    <div class="cant">${hecho}/${m.meta}</div></div>
-                <div class="prog"><span style="width:${pct}%"></span></div>
-            </div>`;
-        }).join("")}
+        ${porRem ? colectaPorRemision() : colectaPorSKU()}
         <div class="seccion-titulo" style="margin-top:24px">FULL · por fecha límite <small>Envíos a preparar (REGISTRO_ENVIOS)</small></div>
-        ${FULL.map(f=>{
-            const pct = Math.round(f.hecho/f.total*100);
-            const urge = f.entrega.startsWith("Hoy");
-            return `<div class="card">
+        ${FULL.length ? FULL.map(f=>{
+            const urge = f.entregaISO === fechaISOhoy();
+            return `<div class="card" style="cursor:pointer" onclick="verFull('${f.envio}')">
                 <div class="item">
                     <div><div class="sku">Envío ${f.envio}</div><div class="desc">${f.canal}</div></div>
-                    <span class="chip ${urge?'urgente':'full'}">${f.entrega}</span>
+                    <span class="chip ${urge?'urgente':'full'}">${fechaBonita(f.entregaISO)}</span>
                 </div>
-                <div class="item" style="border:none;padding-top:4px"><div class="desc">Preparado</div><div class="cant" style="font-size:14px">${f.hecho}/${f.total}</div></div>
-                <div class="prog"><span style="width:${pct}%"></span></div>
+                <div class="item" style="border:none;padding-top:4px"><div class="desc">Por preparar</div><div class="cant" style="font-size:14px">${f.piezasPendientes} pzs · ${f.skus} SKUs <span style="color:var(--gris)">›</span></div></div>
             </div>`;
-        }).join("")}
+        }).join("") : `<p class="vacio">No hay envíos FULL pendientes. 🎉</p>`}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbar();
+}
+
+/* Colecta — vista POR SKU (el machote por corte) */
+function colectaPorSKU(){
+    const items = MACHOTE.cortes[ESTADO.corte] || [];
+    const tapetes = items.filter(m => m.familia === 'Tapetes');
+    const pisos   = items.filter(m => m.familia === 'Pisos');
+    const bloque = arr => arr.map(m => {
+        const hecho = producidoDe(m.sku);
+        const pct = Math.min(100, Math.round(hecho / m.meta * 100));
+        return `<div class="card">
+            <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku}</div></div>
+                <div class="cant">${hecho}/${m.meta}</div></div>
+            <div class="prog"><span style="width:${pct}%"></span></div>
+        </div>`;
+    }).join("");
+    return `<div class="tabs">
+            ${["C1","C2","C3"].map(c=>`<button class="${ESTADO.corte===c?'on':''}" onclick="ESTADO.corte='${c}';render()">${c}<small>${c==='C1'?'8–9h':c==='C2'?'9–12h':'12–17h'}</small></button>`).join("")}
+        </div>
+        ${items.length ? `
+            ${tapetes.length ? `<div class="seccion-titulo" style="font-size:12px;margin-bottom:8px">Tapetes</div>${bloque(tapetes)}` : ``}
+            ${pisos.length ? `<div class="seccion-titulo" style="font-size:12px;margin:14px 0 8px">Pisos</div>${bloque(pisos)}` : ``}
+        ` : `<p class="vacio">El corte ${ESTADO.corte} aún no tiene producción cargada.</p>`}`;
+}
+
+/* Colecta — vista POR REMISIÓN (Opción B: se llenan al producir; FIFO por antigüedad).
+   Solo cuentan las líneas PRODUCIBLES (SKU que está en el machote de hoy). */
+function machoteSet(){
+    const s = {};
+    ["C1","C2","C3"].forEach(c => (MACHOTE.cortes[c]||[]).forEach(it => { s[it.sku] = true; }));
+    return s;
+}
+function remisionesConAvance(){
+    const enMachote = machoteSet();
+    const restante = {};                         // producido disponible por SKU (se gasta FIFO)
+    return COLECTA.map(r => {                     // COLECTA ya viene FIFO (más antigua primero)
+        const prod = (r.lineas||[]).filter(l => enMachote[l.sku]);
+        let done = 0;
+        const lineas = prod.map(l => {
+            if (restante[l.sku] === undefined) restante[l.sku] = producidoDe(l.sku);
+            const asignado = Math.min(restante[l.sku], l.qty);
+            restante[l.sku] -= asignado;
+            const listo = asignado >= l.qty;
+            if (listo) done++;
+            return { sku:l.sku, nombre:l.nombre, qty:l.qty, hecho:asignado, listo:listo };
+        });
+        return { name:r.name, canal:r.canal, lineas:lineas, done:done, total:prod.length,
+                 otras:(r.lineas.length - prod.length), completa: prod.length>0 && done===prod.length };
+    }).filter(r => r.total > 0);                 // solo remisiones que requieren producción
+}
+function colectaPorRemision(){
+    if (!COLECTA.length) return `<p class="vacio">No hay remisiones de Colecta pendientes ahora.</p>`;
+    const rems = remisionesConAvance();
+    if (!rems.length) return `<p class="vacio">Ninguna remisión pendiente requiere producción (todo es de stock).</p>`;
+    return rems.map(r => {
+        const pct = Math.round(r.done / r.total * 100);
+        const b = r.completa;
+        return `<div class="card ${b?'negra':''}" style="cursor:pointer" onclick="verRemision('${r.name}')">
+            <div class="item" style="padding:0">
+                <div><div class="sku" ${b?'style="color:#fff"':''}>${b?'✅ ':''}${r.name}</div>
+                     <div class="desc" ${b?'style="color:rgba(255,255,255,.7)"':''}>${r.canal}</div></div>
+                <div class="cant" style="font-size:14px${b?';color:#fff':''}">${r.done}/${r.total} SKUs ›</div>
+            </div>
+            <div class="prog"><span style="width:${pct}%"></span></div>
+        </div>`;
+    }).join("");
+}
+function verRemision(name){ ESTADO.remSel = remisionesConAvance().find(r => r.name === name) || null; ir('remisionDetalle'); }
+function vistaRemisionDetalle(){
+    const r = ESTADO.remSel;
+    if (!r) { ir('pendientes'); return ''; }
+    return header(r.name, r.canal) + `<main>
+        <div class="card negra">
+            <div class="item" style="padding:0">
+                <div class="sku" style="color:#fff">${r.completa?'Producción completa ✅':'Avance de producción'}</div>
+                <div class="cant" style="color:#fff">${r.done}/${r.total}</div>
+            </div>
+            <div class="prog" style="background:rgba(255,255,255,.25)"><span style="width:${Math.round(r.done/r.total*100)}%;background:#fff"></span></div>
+            ${r.otras ? `<div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">+${r.otras} artículo(s) de stock (no se producen aquí)</div>` : ``}
+        </div>
+        <div class="seccion-titulo">Lo que hay que producir para esta remisión</div>
+        ${r.lineas.map(l=>`
+            <div class="card" style="padding:12px 16px">
+                <div class="item" style="padding:0">
+                    <div><div class="sku">${l.listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}</div></div>
+                    <div class="cant">${l.hecho}/${l.qty}</div>
+                </div>
+                <div class="prog"><span style="width:${Math.min(100,Math.round(l.hecho/l.qty*100))}%"></span></div>
+            </div>`).join("")}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbar();
+}
+
+/* --- DETALLE DE UN ENVÍO FULL: qué SKUs lleva --- */
+function verFull(envio){ ESTADO.fullSel = FULL.find(f => f.envio === envio) || null; ir('fullDetalle'); }
+function vistaFullDetalle(){
+    const f = ESTADO.fullSel;
+    if (!f) { ir('pendientes'); return ''; }
+    const lineas = f.lineas || [];
+    return header("Envío " + f.envio, f.canal) + `<main>
+        <div class="card negra">
+            <div class="item" style="padding:0">
+                <div><div class="sku" style="color:#fff">Fecha límite</div><div class="desc" style="color:rgba(255,255,255,.7)">para tenerlo listo</div></div>
+                <span class="chip" style="background:#fff;color:#000;border-color:#fff">${fechaBonita(f.entregaISO)}</span>
+            </div>
+            <div class="item" style="border:none;padding-top:10px"><div class="desc" style="color:rgba(255,255,255,.7)">Por preparar</div><div class="cant" style="color:#fff">${f.piezasPendientes} pzs · ${f.skusPendientes} SKUs</div></div>
+        </div>
+        <div class="seccion-titulo">Qué lleva este envío <small>Los ✓ ya están validados</small></div>
+        ${lineas.map(l=>`
+            <div class="card" style="padding:12px 16px;${l.validado?'opacity:.45':''}">
+                <div class="item" style="padding:0">
+                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku}${l.validado?' · ✓ listo':''}</div></div>
+                    <div class="cant">${l.piezas}</div>
+                </div>
+            </div>`).join("")}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -572,7 +755,7 @@ function vistaHistorial(){
     const filas = [...REGISTROS].reverse();
     return header("Historial", "Lo producido hoy") + `<main>
         <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas producidas hoy (equipo)</div></div>
-        <div class="seccion-titulo">Hoy · jueves 24 sep</div>
+        <div class="seccion-titulo">Registros de hoy</div>
         ${filas.length ? filas.map((r,i)=>`
             <div class="card" style="padding:12px 16px">
                 <div class="item" style="padding:0">
@@ -625,26 +808,27 @@ function tabbarAdmin(){
 }
 
 function vistaAdminPanel(){
-    const totalMeta = Object.values(CORTES).flat().reduce((a,m)=>a+m.meta,0);
-    const totalHechoMetas = Object.values(CORTES).flat().reduce((a,m)=>a+Math.min(producidoDe(m.sku),m.meta),0);
-    const pct = Math.round(totalHechoMetas/totalMeta*100);
+    const skus = machoteSKUs("");
+    const totalMeta = skus.reduce((a,m)=>a+m.meta,0);
+    const totalHecho = skus.reduce((a,m)=>a+Math.min(producidoDe(m.sku),m.meta),0);
+    const pct = totalMeta ? Math.round(totalHecho/totalMeta*100) : 0;
     return header("Panel general", "Todos · hoy") + `<main>
+        ${avisoMachote()}
         <div class="fila-kpis">
             <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div></div>
             <div class="card kpi"><div class="num">${REGISTROS.length}</div><div class="lbl">registros</div></div>
         </div>
         <div class="card">
-            <div class="item" style="padding:0"><div class="sku">Avance de metas de hoy</div><div class="cant">${pct}%</div></div>
+            <div class="item" style="padding:0"><div class="sku">Avance del machote de hoy</div><div class="cant">${pct}%</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
-            <div class="desc" style="margin-top:8px">${totalHechoMetas} de ${totalMeta} piezas planeadas (cortes C1–C3)</div>
+            <div class="desc" style="margin-top:8px">${totalHecho} de ${totalMeta} piezas del machote (cortes C1–C3)</div>
         </div>
         <div class="seccion-titulo" style="margin-top:20px">FULL por vencer</div>
-        ${FULL.filter(f=>f.hecho<f.total).map(f=>`
+        ${FULL.length ? FULL.map(f=>`
             <div class="card"><div class="item" style="padding:0">
-                <div><div class="sku">Envío ${f.envio}</div><div class="desc">${f.canal}</div></div>
-                <span class="chip ${f.entrega.startsWith('Hoy')?'urgente':'full'}">${f.entrega}</span>
-            </div>
-            <div class="prog"><span style="width:${Math.round(f.hecho/f.total*100)}%"></span></div></div>`).join("")}
+                <div><div class="sku">Envío ${f.envio}</div><div class="desc">${f.canal} · ${f.piezasPendientes} pzs</div></div>
+                <span class="chip ${f.entregaISO===fechaISOhoy()?'urgente':'full'}">${fechaBonita(f.entregaISO)}</span>
+            </div></div>`).join("") : `<p class="vacio">Sin FULL pendientes.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
@@ -691,13 +875,16 @@ function vistaAdminRanking(){
    5) MOTOR DE PANTALLAS
    ================================================================= */
 function render() {
+    if (RAICES.includes(ESTADO.vista)) ESTADO.hist = [];   // en una pantalla de inicio, no hay "atrás"
     const vistas = {
         bienvenida: vistaBienvenida,
-        login: vistaLogin, home: vistaHome, producir: vistaProducir, escanear: vistaEscanear,
-        pendientes: vistaPendientes, historial: vistaHistorial,
+        login: vistaLogin, home: vistaHome, producir: vistaProducir,
+        pendientes: vistaPendientes, fullDetalle: vistaFullDetalle,
+        remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial,
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking,
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
+    const m = $app.querySelector("main"); if (m) m.scrollTop = 0;  // el centro arranca arriba
     $app.scrollTop = 0;
 }
 
@@ -705,7 +892,7 @@ render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
 (async () => {
-    await Promise.all([cargarPersonas(), cargarResumen()]);
+    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta()]);
     render();
 })();
 
