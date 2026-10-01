@@ -311,6 +311,7 @@ let STOCK = {};
 
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
+let SEMANA = null;   // acumulado de la semana (lunes a hoy): { inicio, total, porDia[], ranking[] }
 
 /* ---------- 2) ESTADO ---------- */
 let ESTADO = {
@@ -410,6 +411,7 @@ async function cargarResumen() {
                 id: x.id, persona: x.persona, sku: x.sku, desc: x.desc,
                 familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora
             }));
+            SEMANA = j.semana || null;
         }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
@@ -845,12 +847,33 @@ function vistaAdminPanel(){
     const personasHoy = new Set(REGISTROS.map(r=>r.persona)).size;
     const rems = remisionesConAvance();
     const remCompletas = rems.filter(r=>r.completa).length;
+    const maxDia = SEMANA ? Math.max(1, ...SEMANA.porDia.map(x=>x.piezas)) : 1;
     return header("Panel general", "Todos · hoy") + `<main>
         ${avisoMachote()}
         <div class="fila-kpis">
             <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div></div>
             <div class="card kpi"><div class="num">${personasHoy}</div><div class="lbl">personas activas hoy</div></div>
         </div>
+        ${SEMANA ? `
+        <div class="seccion-titulo" style="margin-top:20px">Producción de la semana <small>lunes a hoy</small></div>
+        <div class="card negra kpi"><div class="num">${SEMANA.total}</div><div class="lbl">piezas producidas esta semana (equipo)</div></div>
+        <div class="card">
+            <div class="sku" style="margin-bottom:10px">Por día</div>
+            ${SEMANA.porDia.map(d=>`
+                <div class="item" style="padding:6px 0">
+                    <div class="desc" style="width:42px">${d.dia}</div>
+                    <div class="prog" style="flex:1;margin:0 10px"><span style="width:${Math.round(d.piezas/maxDia*100)}%"></span></div>
+                    <div class="cant" style="min-width:42px;text-align:right">${d.piezas}</div>
+                </div>`).join("")}
+        </div>
+        ${SEMANA.ranking.length ? `<div class="card">
+            <div class="sku" style="margin-bottom:8px">Por persona (semana)</div>
+            ${SEMANA.ranking.map((p,i)=>`
+                <div class="item" style="padding:6px 0">
+                    <div><span class="desc">${i+1}.</span> ${p.persona}</div><div class="cant">${p.piezas}</div>
+                </div>`).join("")}
+        </div>` : ``}
+        ` : ``}
         <div class="card">
             <div class="item" style="padding:0"><div class="sku">Avance del machote de hoy</div><div class="cant">${pct}%</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
