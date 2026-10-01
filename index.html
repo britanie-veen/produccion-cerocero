@@ -726,9 +726,29 @@ function colectaPorRemision(){
     }).join("");
 }
 function verRemision(name){ ESTADO.remSel = remisionesConAvance().find(r => r.name === name) || null; ir('remisionDetalle'); }
+// Registrar producción para una remisión de Colecta (queda en el Sheet: origen=Colecta + ref=S####). N-05.
+async function registrarRemision(sku){
+    const r = ESTADO.remSel; if (!r) return;
+    const l = (r.lineas || []).find(x => x.sku === sku) || { sku: sku };
+    const txt = prompt(`¿Cuántas piezas produjiste de ${l.nombre || sku} para la remisión ${r.name}?`, "1");
+    if (txt === null) return;
+    const cant = parseInt(txt, 10);
+    if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
+    const familia = /^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "");
+    toast("Guardando…");
+    try {
+        await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
+            sku: sku, desc: l.nombre || sku, familia: familia, cantidad: cant,
+            origen: "Colecta", ref: r.name });
+        await cargarResumen();
+        toast(`✓ ${cant} pzs (${r.name})`);
+    } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
+    render();
+}
 function vistaRemisionDetalle(){
     const r = ESTADO.remSel;
     if (!r) { ir('pendientes'); return ''; }
+    const hechoRem = sku => REGISTROS.filter(x => x.origen==='Colecta' && x.ref===r.name && x.sku===sku).reduce((a,x)=>a+x.cantidad,0);
     return header(r.name, r.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
@@ -739,14 +759,17 @@ function vistaRemisionDetalle(){
             ${r.otras ? `<div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">+${r.otras} artículo(s) de stock (no se producen aquí)</div>` : ``}
         </div>
         <div class="seccion-titulo">Lo que hay que producir para esta remisión</div>
-        ${r.lineas.map(l=>`
-            <div class="card" style="padding:12px 16px">
+        ${r.lineas.map(l=>{
+            const h = hechoRem(l.sku);
+            const pct = Math.min(100, Math.round(h / l.qty * 100));
+            return `<div class="card" style="padding:12px 16px">
                 <div class="item" style="padding:0">
-                    <div><div class="sku">${l.listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}</div></div>
-                    <div class="cant">${l.hecho}/${l.qty}</div>
+                    <div><div class="sku">${h>=l.qty?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.qty}</div></div>
+                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:13px" onclick="registrarRemision('${l.sku}')">➕ Registrar</button>
                 </div>
-                <div class="prog"><span style="width:${Math.min(100,Math.round(l.hecho/l.qty*100))}%"></span></div>
-            </div>`).join("")}
+                <div class="prog"><span style="width:${pct}%"></span></div>
+            </div>`;
+        }).join("")}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
