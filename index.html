@@ -343,7 +343,9 @@ function machoteSKUs(familia){
             map[it.sku].meta += it.meta;
         });
     });
-    return Object.keys(map).map(function(k){ return map[k]; }).sort(function(a,b){ return b.meta - a.meta; });
+    // Prioridad: primero el que tiene MÁS piezas POR PRODUCIR (meta − lo ya hecho hoy). N-06.
+    return Object.keys(map).map(function(k){ return map[k]; })
+        .sort(function(a,b){ return (b.meta - producidoDe(b.sku)) - (a.meta - producidoDe(a.sku)); });
 }
 const inicial = n => n.trim()[0].toUpperCase();
 const producidoDe = sku => REGISTROS.filter(r => r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
@@ -657,8 +659,10 @@ function vistaPendientes(){
 /* Colecta — vista POR SKU (el machote por corte) */
 function colectaPorSKU(){
     const items = MACHOTE.cortes[ESTADO.corte] || [];
-    const tapetes = items.filter(m => m.familia === 'Tapetes');
-    const pisos   = items.filter(m => m.familia === 'Pisos');
+    // Prioridad: primero el que tiene MÁS piezas por producir (meta − lo ya hecho). N-06.
+    const porFaltante = (a,b) => (b.meta - producidoDe(b.sku)) - (a.meta - producidoDe(a.sku));
+    const tapetes = items.filter(m => m.familia === 'Tapetes').sort(porFaltante);
+    const pisos   = items.filter(m => m.familia === 'Pisos').sort(porFaltante);
     const bloque = arr => arr.map(m => {
         const hecho = producidoDe(m.sku);
         const pct = Math.min(100, Math.round(hecho / m.meta * 100));
