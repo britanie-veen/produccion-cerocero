@@ -35,7 +35,7 @@
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        html, body { height: 100%; }
+        html, body { height: 100%; overscroll-behavior: none; }
         body {
             font-family: 'Montserrat', sans-serif;
             background-color: var(--fondo);
@@ -45,6 +45,9 @@
             height: 100vh;
             height: 100dvh;      /* dvh = alto real del celular (sin que la barra del navegador estorbe) */
             overflow: hidden;    /* la PÁGINA no se mueve; solo scrollea el contenido de en medio */
+            overscroll-behavior: none;   /* quita el "rebote" de hule al llegar al borde */
+            position: fixed;     /* ancla la app: la barra del navegador ya no la empuja */
+            width: 100%;
         }
 
         /* El "teléfono": marco FIJO de alto completo; header y barra quedan quietos, el centro scrollea */
@@ -98,6 +101,7 @@
             min-height: 0;             /* CLAVE: deja que SOLO el centro scrollee dentro del marco fijo */
             padding: 20px 18px 24px;
             overflow-y: auto;
+            overscroll-behavior: contain;   /* el scroll del centro no se "contagia" a la página */
             -webkit-overflow-scrolling: touch;
         }
 
@@ -268,6 +272,7 @@ const MOTOR_URL = "https://script.google.com/macros/s/AKfycby4ZUI7hIcSVVbqFN50OE
 // ⭐ ADMINS = SOLO estas personas. Cualquiera que NO esté aquí es operador.
 // (Claudia NO es admin: es jefa de almacén, valida en Odoo, no supervisa desde la app.)
 const ADMINS = ["Britanie Ramos", "Karla González"];
+const ADMIN_PIN = "1357";   // PIN del panel de administrador (lo eligió Britanie)
 
 /* ---------- 1) DATOS DE EJEMPLO (mock) ---------- */
 // OPERADORES = personal de ALMACÉN (de COLABORADORES.xlsx, OF/AL="Almacén", sin duplicados).
@@ -300,6 +305,9 @@ let FULL = [];
 // Remisiones de Colecta (S####) — del motor (Odoo). Para la vista "por remisión".
 //    cada una: { name, canal, fecha, lineas:[{sku,nombre,qty}] } (ordenadas FIFO, más antigua primero)
 let COLECTA = [];
+
+// Stock disponible por SKU — de Odoo (SOLO CONSULTA). { sku: piezas }
+let STOCK = {};
 
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
@@ -429,6 +437,16 @@ async function cargarColecta() {
         if (j && j.ok) COLECTA = j.remisiones || [];
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
+// Leer el stock disponible por SKU (Odoo, solo consulta).
+async function cargarStock() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=stock");
+        const j = await r.json();
+        if (j && j.ok) STOCK = j.stock || {};
+    } catch (e) { /* sin internet: deja lo que haya */ }
+}
+// Texto del stock de un SKU ("40 pzs" o "—" si no lo hay).
+function stockTxt(sku){ return (STOCK[sku] !== undefined) ? Number(STOCK[sku]).toLocaleString('es-MX') + ' pzs' : '—'; }
 // Enviar algo al motor (guardar / deshacer). no-cors: se ejecuta aunque no leamos la respuesta.
 async function enviarMotor(payload) {
     await fetch(MOTOR_URL, {
@@ -581,6 +599,7 @@ function vistaProducir() {
         <div class="card">
             <div class="item" style="padding:0"><div class="desc">Meta de hoy para este SKU</div><div class="cant" style="font-size:18px">${hecho}/${sel.meta} pzs</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
+            <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sel.sku)}</div></div>
         </div>
         <div class="seccion-titulo">Cantidad de piezas</div>
         <div class="stepper">
@@ -642,7 +661,7 @@ function colectaPorSKU(){
         const hecho = producidoDe(m.sku);
         const pct = Math.min(100, Math.round(hecho / m.meta * 100));
         return `<div class="card">
-            <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku}</div></div>
+            <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku} · Stock ${stockTxt(m.sku)}</div></div>
                 <div class="cant">${hecho}/${m.meta}</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
         </div>`;
@@ -725,11 +744,26 @@ function vistaRemisionDetalle(){
 }
 
 /* --- DETALLE DE UN ENVÍO FULL: qué SKUs lleva --- */
+// "Por hacer" = se produce aquí: tapetes (MUK-TAPFOM/TAPTEC/YOG) y pisos/vinil (VIN-). El resto = terminado.
+function esPorHacer(sku){
+    const s = String(sku||"").toUpperCase();
+    return /^VIN-/.test(s) || /^MUK-(TAPFOM|TAPTEC|YOG)/.test(s);
+}
 function verFull(envio){ ESTADO.fullSel = FULL.find(f => f.envio === envio) || null; ir('fullDetalle'); }
 function vistaFullDetalle(){
     const f = ESTADO.fullSel;
     if (!f) { ir('pendientes'); return ''; }
     const lineas = f.lineas || [];
+    const porHacer  = lineas.filter(l => esPorHacer(l.sku));
+    const terminado = lineas.filter(l => !esPorHacer(l.sku));
+    const pzs = arr => arr.reduce((a,l)=>a + (l.piezas||0), 0);
+    const cardLinea = l => `
+            <div class="card" style="padding:12px 16px;${l.validado?'opacity:.45':''}">
+                <div class="item" style="padding:0">
+                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku}${l.validado?' · ✓ listo':''}</div></div>
+                    <div class="cant">${l.piezas}</div>
+                </div>
+            </div>`;
     return header("Envío " + f.envio, f.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
@@ -738,14 +772,10 @@ function vistaFullDetalle(){
             </div>
             <div class="item" style="border:none;padding-top:10px"><div class="desc" style="color:rgba(255,255,255,.7)">Por preparar</div><div class="cant" style="color:#fff">${f.piezasPendientes} pzs · ${f.skusPendientes} SKUs</div></div>
         </div>
-        <div class="seccion-titulo">Qué lleva este envío <small>Los ✓ ya están validados</small></div>
-        ${lineas.map(l=>`
-            <div class="card" style="padding:12px 16px;${l.validado?'opacity:.45':''}">
-                <div class="item" style="padding:0">
-                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku}${l.validado?' · ✓ listo':''}</div></div>
-                    <div class="cant">${l.piezas}</div>
-                </div>
-            </div>`).join("")}
+        <div class="seccion-titulo">🔨 Por hacer <small>${porHacer.length} SKUs · ${pzs(porHacer)} pzs — se producen (tapetes y pisos)</small></div>
+        ${porHacer.length ? porHacer.map(cardLinea).join("") : `<p class="vacio">Nada por producir en este envío.</p>`}
+        <div class="seccion-titulo" style="margin-top:20px">🟢 Producto terminado <small>${terminado.length} SKUs · ${pzs(terminado)} pzs — ya listo, solo empacar</small></div>
+        ${terminado.length ? terminado.map(cardLinea).join("") : `<p class="vacio">Sin producto terminado en este envío.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -784,17 +814,17 @@ function vistaAdminPin(){
         <h2>Acceso administrador</h2>
         <p class="sub">${ESTADO.usuario.nombre}</p>
         <div style="margin-top:24px">
-            <input class="selbox" id="pin" type="password" inputmode="numeric" placeholder="PIN (demo: 0000)"
-                   style="text-align:center;letter-spacing:6px">
+            <input class="selbox" id="pin" type="password" inputmode="numeric" placeholder="PIN"
+                   style="text-align:center;letter-spacing:6px" onkeydown="if(event.key==='Enter')validarPin()">
             <button class="btn" onclick="validarPin()">Entrar <span class="flecha">→</span></button>
             <div class="link" onclick="ir('login')">Cambiar de usuario</div>
         </div>
     </div>`;
 }
 function validarPin(){
-    const v = document.getElementById("pin").value;
-    if (v === "0000" || v === "") ir("adminPanel");   // demo: acepta 0000 o vacío
-    else toast("PIN incorrecto (demo: 0000)");
+    const v = document.getElementById("pin").value.trim();
+    if (v === ADMIN_PIN) ir("adminPanel");
+    else toast("PIN incorrecto");
 }
 
 function tabbarAdmin(){
@@ -812,17 +842,25 @@ function vistaAdminPanel(){
     const totalMeta = skus.reduce((a,m)=>a+m.meta,0);
     const totalHecho = skus.reduce((a,m)=>a+Math.min(producidoDe(m.sku),m.meta),0);
     const pct = totalMeta ? Math.round(totalHecho/totalMeta*100) : 0;
+    const personasHoy = new Set(REGISTROS.map(r=>r.persona)).size;
+    const rems = remisionesConAvance();
+    const remCompletas = rems.filter(r=>r.completa).length;
     return header("Panel general", "Todos · hoy") + `<main>
         ${avisoMachote()}
         <div class="fila-kpis">
             <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div></div>
-            <div class="card kpi"><div class="num">${REGISTROS.length}</div><div class="lbl">registros</div></div>
+            <div class="card kpi"><div class="num">${personasHoy}</div><div class="lbl">personas activas hoy</div></div>
         </div>
         <div class="card">
             <div class="item" style="padding:0"><div class="sku">Avance del machote de hoy</div><div class="cant">${pct}%</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
             <div class="desc" style="margin-top:8px">${totalHecho} de ${totalMeta} piezas del machote (cortes C1–C3)</div>
         </div>
+        ${rems.length ? `<div class="card">
+            <div class="item" style="padding:0"><div class="sku">Colecta (remisiones)</div><div class="cant">${remCompletas}/${rems.length}</div></div>
+            <div class="prog"><span style="width:${Math.round(remCompletas/rems.length*100)}%"></span></div>
+            <div class="desc" style="margin-top:8px">${remCompletas} completas de ${rems.length} que requieren producción</div>
+        </div>` : ``}
         <div class="seccion-titulo" style="margin-top:20px">FULL por vencer</div>
         ${FULL.length ? FULL.map(f=>`
             <div class="card"><div class="item" style="padding:0">
@@ -840,14 +878,14 @@ function vistaAdminPersona(){
     const max = filas.length ? filas[0][1] : 1;
     return header("Por persona", "Producción de hoy") + `<main>
         <div class="seccion-titulo">Producción de hoy por persona</div>
-        ${filas.map(([n,c])=>`
+        ${filas.length ? filas.map(([n,c])=>`
             <div class="card">
                 <div class="item" style="padding:0">
                     <div class="avatar" style="width:34px;height:34px;font-size:13px">${inicial(n)}</div>
                     <div class="sku">${n}</div><div class="cant">${c} pzs</div>
                 </div>
                 <div class="prog"><span style="width:${Math.round(c/max*100)}%"></span></div>
-            </div>`).join("")}
+            </div>`).join("") : `<p class="vacio">Aún no hay producción hoy.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
@@ -858,15 +896,15 @@ function vistaAdminRanking(){
     const filas = Object.entries(porPersona).sort((a,b)=>b[1]-a[1]);
     const medallas = ["🥇","🥈","🥉"];
     return header("Ranking", "Desempeño del día") + `<main>
-        <div class="seccion-titulo">Quién va mejor hoy <small>Por piezas producidas (demo)</small></div>
-        ${filas.map(([n,c],i)=>`
+        <div class="seccion-titulo">Quién va mejor hoy <small>Por piezas producidas</small></div>
+        ${filas.length ? filas.map(([n,c],i)=>`
             <div class="card ${i===0?'negra':''}">
                 <div class="item" style="padding:0">
                     <div style="font-size:24px;width:34px;text-align:center">${medallas[i]||(i+1)}</div>
                     <div class="sku" style="${i===0?'color:#fff':''}">${n}</div>
                     <div class="cant">${c} pzs</div>
                 </div>
-            </div>`).join("")}
+            </div>`).join("") : `<p class="vacio">Aún no hay producción hoy.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
@@ -892,9 +930,18 @@ render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
 (async () => {
-    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta()]);
+    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock()]);
     render();
 })();
+
+/* Auto-refresco del panel de admin (cada 30 s) — visibilidad en vivo, sin recargar. */
+setInterval(async () => {
+    if (!["adminPanel", "adminPersona", "adminRanking"].includes(ESTADO.vista)) return;
+    await Promise.all([cargarResumen(), cargarColecta(), cargarFull()]);
+    const m = $app.querySelector("main"); const sc = m ? m.scrollTop : 0;
+    render();
+    const m2 = $app.querySelector("main"); if (m2) m2.scrollTop = sc;   // conserva el scroll
+}, 30000);
 
 /* Registrar el Service Worker → habilita "instalar en el teléfono" y modo sin internet */
 if ('serviceWorker' in navigator) {
