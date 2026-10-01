@@ -411,7 +411,8 @@ async function cargarResumen() {
         if (j.ok) {
             REGISTROS = (j.registrosHoy || []).map(x => ({
                 id: x.id, persona: x.persona, sku: x.sku, desc: x.desc,
-                familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora
+                familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora,
+                origen: x.origen || 'Colecta', ref: x.ref || ''
             }));
             SEMANA = j.semana || null;
         }
@@ -622,7 +623,8 @@ async function guardar(){
     toast("Guardando…");
     try {
         await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
-            sku: sku, desc: prod(sku).desc, familia: ESTADO.reg.familia, cantidad: cant });
+            sku: sku, desc: prod(sku).desc, familia: ESTADO.reg.familia, cantidad: cant,
+            origen: "Colecta" });   // lo del machote es Colecta (N-04)
         await cargarResumen();               // vuelve a leer lo de hoy (ya con lo nuevo)
         toast(`✓ ${cant} pzs de ${prod(sku).desc}`);
     } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
@@ -756,6 +758,25 @@ function esPorHacer(sku){
     return /^VIN-/.test(s) || /^MUK-(TAPFOM|TAPTEC|YOG)/.test(s);
 }
 function verFull(envio){ ESTADO.fullSel = FULL.find(f => f.envio === envio) || null; ir('fullDetalle'); }
+// Registrar producción para un envío FULL (queda marcado origen=FULL + referencia del envío). N-04/N-05.
+async function registrarFull(sku){
+    const f = ESTADO.fullSel; if (!f) return;
+    const l = (f.lineas || []).find(x => x.sku === sku) || { sku: sku };
+    const txt = prompt(`¿Cuántas piezas produjiste de ${l.nombre || sku} para el envío FULL ${f.envio}?`, "1");
+    if (txt === null) return;
+    const cant = parseInt(txt, 10);
+    if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
+    const familia = /^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "");
+    toast("Guardando…");
+    try {
+        await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
+            sku: sku, desc: l.nombre || sku, familia: familia, cantidad: cant,
+            origen: "FULL", ref: f.envio });
+        await cargarResumen();
+        toast(`✓ ${cant} pzs (FULL ${f.envio})`);
+    } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
+    render();
+}
 function vistaFullDetalle(){
     const f = ESTADO.fullSel;
     if (!f) { ir('pendientes'); return ''; }
@@ -763,6 +784,7 @@ function vistaFullDetalle(){
     const porHacer  = lineas.filter(l => esPorHacer(l.sku));
     const terminado = lineas.filter(l => !esPorHacer(l.sku));
     const pzs = arr => arr.reduce((a,l)=>a + (l.piezas||0), 0);
+    const hechoFull = sku => REGISTROS.filter(r => r.origen==='FULL' && r.ref===f.envio && r.sku===sku).reduce((a,r)=>a+r.cantidad,0);
     const cardLinea = l => `
             <div class="card" style="padding:12px 16px;${l.validado?'opacity:.45':''}">
                 <div class="item" style="padding:0">
@@ -770,6 +792,15 @@ function vistaFullDetalle(){
                     <div class="cant">${l.piezas}</div>
                 </div>
             </div>`;
+    const cardPorHacer = l => {
+        const h = hechoFull(l.sku);
+        return `<div class="card" style="padding:12px 16px">
+                <div class="item" style="padding:0">
+                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.piezas}</div></div>
+                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:13px" onclick="registrarFull('${l.sku}')">➕ Registrar</button>
+                </div>
+            </div>`;
+    };
     return header("Envío " + f.envio, f.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
@@ -779,7 +810,7 @@ function vistaFullDetalle(){
             <div class="item" style="border:none;padding-top:10px"><div class="desc" style="color:rgba(255,255,255,.7)">Por preparar</div><div class="cant" style="color:#fff">${f.piezasPendientes} pzs · ${f.skusPendientes} SKUs</div></div>
         </div>
         <div class="seccion-titulo">🔨 Por hacer <small>${porHacer.length} SKUs · ${pzs(porHacer)} pzs — se producen (tapetes y pisos)</small></div>
-        ${porHacer.length ? porHacer.map(cardLinea).join("") : `<p class="vacio">Nada por producir en este envío.</p>`}
+        ${porHacer.length ? porHacer.map(cardPorHacer).join("") : `<p class="vacio">Nada por producir en este envío.</p>`}
         <div class="seccion-titulo" style="margin-top:20px">🟢 Producto terminado <small>${terminado.length} SKUs · ${pzs(terminado)} pzs — ya listo, solo empacar</small></div>
         ${terminado.length ? terminado.map(cardLinea).join("") : `<p class="vacio">Sin producto terminado en este envío.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
@@ -797,7 +828,7 @@ function vistaHistorial(){
                 <div class="item" style="padding:0">
                     <div class="avatar" style="width:34px;height:34px;font-size:13px">${inicial(r.persona)}</div>
                     <div><div class="sku">${r.desc || prod(r.sku).desc} · ${r.cantidad} pzs</div>
-                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span></div></div>
+                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span> · ${r.origen==='FULL'?('📦 FULL'+(r.ref?' '+r.ref:'')):'🧺 Colecta'}</div></div>
                     <div class="cant" style="font-size:13px;color:var(--gris);cursor:pointer" onclick="deshacer('${r.id}')">Deshacer</div>
                 </div>
             </div>`).join("") : `<p class="vacio">Aún no hay registros hoy.</p>`}
@@ -852,11 +883,18 @@ function vistaAdminPanel(){
     const rems = remisionesConAvance();
     const remCompletas = rems.filter(r=>r.completa).length;
     const maxDia = SEMANA ? Math.max(1, ...SEMANA.porDia.map(x=>x.piezas)) : 1;
+    const colectaHoy = REGISTROS.filter(r=>r.origen!=='FULL').reduce((a,r)=>a+r.cantidad,0);
+    const fullHoy    = REGISTROS.filter(r=>r.origen==='FULL').reduce((a,r)=>a+r.cantidad,0);
     return header("Panel general", "Todos · hoy") + `<main>
         ${avisoMachote()}
         <div class="fila-kpis">
             <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div></div>
             <div class="card kpi"><div class="num">${personasHoy}</div><div class="lbl">personas activas hoy</div></div>
+        </div>
+        <div class="card">
+            <div class="item" style="padding:0"><div class="sku">Hoy por origen</div><div class="desc">Colecta vs FULL</div></div>
+            <div class="item" style="border:none;padding-top:8px"><div class="desc">🧺 Colecta</div><div class="cant">${colectaHoy} pzs</div></div>
+            <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${fullHoy} pzs</div></div>
         </div>
         ${SEMANA ? `
         <div class="seccion-titulo" style="margin-top:20px">Producción de la semana <small>lunes a hoy</small></div>
