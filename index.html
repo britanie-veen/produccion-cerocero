@@ -68,7 +68,7 @@
         header {
             background: var(--negro);
             color: var(--blanco);
-            padding: 20px 22px calc(20px + env(safe-area-inset-top));
+            padding: calc(20px + env(safe-area-inset-top)) 22px 20px;   /* margen seguro ARRIBA (hora/isla del iPhone) */
             display: flex;
             align-items: center;
             gap: 14px;
@@ -94,6 +94,13 @@
             font-family: inherit; padding: 0 2px 0 0;
         }
         header .btn-atras:active { opacity: .55; }
+
+        /* ---------- Fotos de producto (Odoo) ---------- */
+        .foto-wrap { margin: 0 0 14px; text-align: center; }
+        .foto-wrap img { display: none; width: 100%; max-height: 240px; object-fit: contain;
+            border-radius: 14px; background: #fafafa; border: 1px solid var(--linea); }
+        .foto-wrap.grande img { max-height: 380px; }
+        .foto-wrap img.ok { display: block; }
 
         /* ---------- Contenido ---------- */
         main {
@@ -309,6 +316,9 @@ let COLECTA = [];
 // Stock disponible por SKU — de Odoo (SOLO CONSULTA). { sku: piezas }
 let STOCK = {};
 
+// Fotos de producto por SKU — de Odoo (SOLO CONSULTA). { sku: 'data:image/...' | '' (sin foto) }
+let FOTOS = {};
+
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
 let SEMANA = null;   // acumulado de la semana (lunes a hoy): { inicio, total, porDia[], ranking[] }
@@ -355,7 +365,7 @@ const totalHoy = () => REGISTROS.reduce((a, r) => a + r.cantidad, 0);
 function fechaISOhoy(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
     return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
 function fechaHoyArchivo(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
-    return p(d.getDate())+"-"+p(d.getMonth()+1)+"-"+d.getFullYear()+".xlsx"; }
+    return p(d.getDate())+"-"+p(d.getMonth()+1)+"-"+d.getFullYear(); }   // dd-mm-aaaa (el archivo de Sofi la trae dentro del nombre)
 function fechaBonita(iso){
     if (!iso) return "sin fecha";
     if (iso === fechaISOhoy()) return "HOY";
@@ -423,7 +433,7 @@ async function cargarMachote() {
     try {
         const r = await fetch(MOTOR_URL + "?action=machote");
         const j = await r.json();
-        if (j && j.ok) { MACHOTE = j; MACHOTE.esDeHoy = (j.archivo === fechaHoyArchivo()); }
+        if (j && j.ok) { MACHOTE = j; MACHOTE.esDeHoy = String(j.archivo || "").indexOf(fechaHoyArchivo()) >= 0; }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Leer los FULL pendientes (por fecha límite) del motor.
@@ -452,6 +462,27 @@ async function cargarStock() {
 }
 // Texto del stock de un SKU ("40 pzs" o "—" si no lo hay).
 function stockTxt(sku){ return (STOCK[sku] !== undefined) ? Number(STOCK[sku]).toLocaleString('es-MX') + ' pzs' : '—'; }
+// Foto de un SKU: se pide al motor solo cuando se va a ver y se recuerda mientras la app está abierta.
+function mimeDe(b64){ return b64.startsWith("iVBOR") ? "image/png" : b64.startsWith("UklGR") ? "image/webp" : "image/jpeg"; }
+async function cargarFoto(sku) {
+    if (FOTOS[sku] !== undefined) return FOTOS[sku];
+    FOTOS[sku] = "";                                   // evita pedirla dos veces a la vez
+    try {
+        const r = await fetch(MOTOR_URL + "?action=foto&sku=" + encodeURIComponent(sku));
+        const j = await r.json();
+        FOTOS[sku] = (j && j.ok && j.imagen) ? "data:" + mimeDe(j.imagen) + ";base64," + j.imagen : "";
+    } catch (e) { delete FOTOS[sku]; return ""; }      // sin internet: se reintenta la próxima vez
+    return FOTOS[sku];
+}
+// Rellena las <img data-foto="SKU"> que haya en pantalla (si el SKU no tiene foto, no se muestra nada).
+async function hidratarFotos() {
+    const imgs = [...$app.querySelectorAll("img[data-foto]")];
+    for (const im of imgs) {
+        const sku = im.dataset.foto, src = await cargarFoto(sku);
+        if (src && im.isConnected && im.dataset.foto === sku) { im.src = src; im.classList.add("ok"); }
+    }
+}
+
 // Enviar algo al motor (guardar / deshacer). no-cors: se ejecuta aunque no leamos la respuesta.
 async function enviarMotor(payload) {
     await fetch(MOTOR_URL, {
@@ -601,6 +632,7 @@ function vistaProducir() {
         <select onchange="ESTADO.reg.sku=this.value;render()">
             ${lista.map(p => `<option value="${p.sku}" ${p.sku===ESTADO.reg.sku?'selected':''}>${p.nombre} · ${p.sku}</option>`).join("")}
         </select>
+        <div class="foto-wrap"><img data-foto="${sel.sku}" alt="${sel.nombre}"></div>
         <div class="card">
             <div class="item" style="padding:0"><div class="desc">Meta de hoy para este SKU</div><div class="cant" style="font-size:18px">${hecho}/${sel.meta} pzs</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
@@ -668,9 +700,9 @@ function colectaPorSKU(){
     const bloque = arr => arr.map(m => {
         const hecho = producidoDe(m.sku);
         const pct = Math.min(100, Math.round(hecho / m.meta * 100));
-        return `<div class="card">
+        return `<div class="card" style="cursor:pointer" onclick="verSku('${m.sku}')">
             <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku} · Stock ${stockTxt(m.sku)}</div></div>
-                <div class="cant">${hecho}/${m.meta}</div></div>
+                <div class="cant">${hecho}/${m.meta} <span style="color:var(--gris)">›</span></div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
         </div>`;
     }).join("");
@@ -681,6 +713,31 @@ function colectaPorSKU(){
             ${tapetes.length ? `<div class="seccion-titulo" style="font-size:12px;margin-bottom:8px">Tapetes</div>${bloque(tapetes)}` : ``}
             ${pisos.length ? `<div class="seccion-titulo" style="font-size:12px;margin:14px 0 8px">Pisos</div>${bloque(pisos)}` : ``}
         ` : `<p class="vacio">El corte ${ESTADO.corte} aún no tiene producción cargada.</p>`}`;
+}
+
+/* DETALLE DE UN SKU (desde Pendientes → Colecta → Por SKU): foto grande + meta, avance y stock */
+function verSku(sku){ ESTADO.skuSel = sku; ir('skuDetalle'); }
+function vistaSkuDetalle(){
+    const sku = ESTADO.skuSel;
+    if (!sku) { ir('pendientes'); return ''; }
+    const info = machoteSKUs("").find(x => x.sku === sku) || { sku: sku, nombre: prod(sku).desc, familia: prod(sku).familia, meta: 0 };
+    const hecho = producidoDe(sku);
+    const pct = info.meta ? Math.min(100, Math.round(hecho / info.meta * 100)) : 0;
+    const porCorte = ["C1","C2","C3"].map(c => {
+        const it = (MACHOTE.cortes[c] || []).find(x => x.sku === sku);
+        return it ? `<div class="item"><div class="desc">Corte ${c} (${c==='C1'?'8–9h':c==='C2'?'9–12h':'12–17h'})</div><div class="cant" style="font-size:14px">${it.meta} pzs</div></div>` : "";
+    }).join("");
+    return header(info.nombre, sku) + `<main>
+        <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
+        <div class="card">
+            <div class="item" style="padding:0"><div class="desc">Producido hoy / meta</div><div class="cant" style="font-size:18px">${hecho}/${info.meta} pzs</div></div>
+            <div class="prog"><span style="width:${pct}%"></span></div>
+            <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sku)}</div></div>
+        </div>
+        ${porCorte ? `<div class="card">${porCorte}</div>` : ``}
+        <button class="btn" onclick="ESTADO.reg.familia='${info.familia === 'Pisos' ? 'Pisos' : 'Tapetes'}';ESTADO.reg.sku='${sku}';ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbar();
 }
 
 /* Colecta — vista POR REMISIÓN (Opción B: se llenan al producir; FIFO por antigüedad).
@@ -1005,13 +1062,14 @@ function render() {
     const vistas = {
         bienvenida: vistaBienvenida,
         login: vistaLogin, home: vistaHome, producir: vistaProducir,
-        pendientes: vistaPendientes, fullDetalle: vistaFullDetalle,
+        pendientes: vistaPendientes, skuDetalle: vistaSkuDetalle, fullDetalle: vistaFullDetalle,
         remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial,
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking,
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
     const m = $app.querySelector("main"); if (m) m.scrollTop = 0;  // el centro arranca arriba
     $app.scrollTop = 0;
+    hidratarFotos();                                              // fotos de Odoo de lo que se ve en pantalla
 }
 
 render(); // arranca la app (pantalla de bienvenida, al instante)
