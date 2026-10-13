@@ -333,6 +333,7 @@ let ESTADO = {
     vista: "bienvenida",// pantalla actual (arranca en la bienvenida)
     hist: [],           // memoria de navegación: pantallas por las que pasé (para la flecha ←)
     filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
+    filtroHist: "",     // filtro del historial del administrador ("" = todas las personas)
     corte: "C1",        // corte seleccionado
     colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
     reg: { familia: "Tapetes", sku: null, cantidad: 1 }, // captura en curso
@@ -959,22 +960,53 @@ function vistaFullDetalle(){
 }
 
 /* --- HISTORIAL por día --- */
-function vistaHistorial(){
-    const filas = [...REGISTROS].reverse();
-    return header("Historial", "Lo producido hoy") + `<main>
-        <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas producidas hoy (equipo)</div></div>
-        <div class="seccion-titulo">Registros de hoy</div>
-        ${filas.length ? filas.map((r,i)=>`
+function filaHistorial(r) {
+    return `
             <div class="card" style="padding:12px 16px">
                 <div class="item" style="padding:0">
                     <div class="avatar" style="width:34px;height:34px;font-size:13px">${inicial(r.persona)}</div>
                     <div><div class="sku">${r.desc || prod(r.sku).desc} · ${r.cantidad} pzs</div>
-                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span> · ${r.origen==='FULL'?('📦 FULL'+(r.ref?' '+r.ref:'')):'🧺 Colecta'}</div></div>
+                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span> · ${r.origen==='FULL'?('📦 FULL'+(r.ref?' '+r.ref:'')):('🧺 Colecta'+(r.ref?' '+r.ref:''))}</div></div>
                     <div class="cant" style="font-size:13px;color:var(--gris);cursor:pointer" onclick="deshacer('${r.id}')">Deshacer</div>
                 </div>
-            </div>`).join("") : `<p class="vacio">Aún no hay registros hoy.</p>`}
+            </div>`;
+}
+/* Mi historial: SOLO lo que registró la persona que entró (hoy) */
+function vistaHistorial(){
+    const yo = ESTADO.usuario.nombre;
+    const filas = REGISTROS.filter(r => r.persona === yo).reverse();
+    const total = filas.reduce((a, r) => a + r.cantidad, 0);
+    return header("Mi historial", "Lo que tú produjiste hoy") + `<main>
+        <div class="card negra kpi"><div class="num">${total}</div><div class="lbl">piezas que TÚ produjiste hoy</div></div>
+        <div class="seccion-titulo">Mis registros de hoy</div>
+        ${filas.length ? filas.map(filaHistorial).join("") : `<p class="vacio">Aún no has registrado nada hoy.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
+}
+/* Historial del ADMINISTRADOR: todos los registros de hoy, con filtro por persona */
+function setFiltroHist(v) {
+    const m = $app.querySelector("main"), sc = m ? m.scrollTop : 0;
+    ESTADO.filtroHist = v; render();
+    const m2 = $app.querySelector("main"); if (m2) m2.scrollTop = sc;
+}
+function vistaAdminHistorial(){
+    const f = ESTADO.filtroHist || "";
+    const esc = t => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const todos = [...REGISTROS].reverse();
+    const filas = f ? todos.filter(r => r.persona === f) : todos;
+    const total = filas.reduce((a, r) => a + r.cantidad, 0);
+    const nombres = [...new Set(PERSONAS.map(p => p.nombre).concat(REGISTROS.map(r => r.persona)))]
+        .sort((a, b) => a.localeCompare(b, "es"));
+    return header("Historial", "Todos · hoy") + `<main>
+        <select onchange="setFiltroHist(this.value)">
+            <option value="">Todas las personas</option>
+            ${nombres.map(n => `<option value="${esc(n)}" ${n === f ? "selected" : ""}>${esc(n)}</option>`).join("")}
+        </select>
+        <div class="card negra kpi" style="margin-top:12px"><div class="num">${total}</div><div class="lbl">${f ? "piezas de " + esc(f) + " hoy" : "piezas producidas hoy (equipo)"} · ${filas.length} registros</div></div>
+        <div class="seccion-titulo">Registros de hoy</div>
+        ${filas.length ? filas.map(filaHistorial).join("") : `<p class="vacio">No hay registros${f ? " de esta persona" : ""} hoy.</p>`}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbarAdmin();
 }
 async function deshacer(id){
     toast("Deshaciendo…");
@@ -1010,6 +1042,7 @@ function tabbarAdmin(){
         { v: "adminPanel",  ico: "📊", txt: "Panel" },
         { v: "adminPersona",ico: "👥", txt: "Por persona" },
         { v: "adminRanking",ico: "🏆", txt: "Ranking" },
+        { v: "adminHistorial",ico: "🕑", txt: "Historial" },
     ];
     return `<nav class="tabbar">${tabs.map(t=>`
         <button onclick="ir('${t.v}')" class="${ESTADO.vista===t.v?'on':''}"><span class="ico">${t.ico}</span>${t.txt}</button>`).join("")}</nav>`;
@@ -1125,7 +1158,7 @@ function render() {
         login: vistaLogin, home: vistaHome, producir: vistaProducir,
         pendientes: vistaPendientes, skuDetalle: vistaSkuDetalle, fullDetalle: vistaFullDetalle,
         remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial,
-        adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking,
+        adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking, adminHistorial: vistaAdminHistorial,
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
     const m = $app.querySelector("main"); if (m) m.scrollTop = 0;  // el centro arranca arriba
@@ -1143,7 +1176,7 @@ render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Auto-refresco del panel de admin (cada 30 s) — visibilidad en vivo, sin recargar. */
 setInterval(async () => {
-    if (!["adminPanel", "adminPersona", "adminRanking"].includes(ESTADO.vista)) return;
+    if (!["adminPanel", "adminPersona", "adminRanking", "adminHistorial"].includes(ESTADO.vista)) return;
     await Promise.all([cargarResumen(), cargarColecta(), cargarFull()]);
     const m = $app.querySelector("main"); const sc = m ? m.scrollTop : 0;
     render();
