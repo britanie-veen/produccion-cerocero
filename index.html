@@ -206,6 +206,9 @@
             background: var(--blanco); font-size: 28px; font-weight: 900; cursor: pointer; font-family: inherit;
         }
         .stepper .valor { font-weight: 900; font-size: 46px; min-width: 90px; text-align: center; }
+        .stepper input.valor { width: 120px; min-width: 0; border: 2px solid var(--negro); border-radius: 14px; padding: 6px 4px;
+            font-family: inherit; background: var(--blanco); color: var(--negro); -moz-appearance: textfield; }
+        .stepper input.valor::-webkit-outer-spin-button, .stepper input.valor::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
         select, .selbox {
             width: 100%; padding: 15px 16px; border: 1.5px solid var(--negro); border-radius: 14px;
@@ -318,6 +321,7 @@ let STOCK = {};
 
 // Fotos de producto por SKU — de Odoo (SOLO CONSULTA). { sku: 'data:image/...' | '' (sin foto) }
 let FOTOS = {};
+let NOMBRES = {};   // sku -> nombre, de las líneas de remisiones/FULL que se han visto
 
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
@@ -394,11 +398,14 @@ function toast(msg) {
 // Pantallas "raíz" (de inicio): NO llevan flecha de atrás y reinician el historial.
 const RAICES = ["bienvenida", "login", "home", "adminPin", "adminPanel"];
 function ir(vista) {
+    if (vista === 'producir' && !ESTADO.ctxListo) ESTADO.reg.ctx = null;   // Producir normal: sin remisión/envío
+    ESTADO.ctxListo = false;
     if (ESTADO.vista && ESTADO.vista !== vista) ESTADO.hist.push(ESTADO.vista); // recuerda de dónde vengo
     ESTADO.vista = vista;
     render();
 }
 function atras() {                                   // la flecha ← regresa a la pantalla anterior
+    ESTADO.reg.ctx = null;
     if (ESTADO.hist.length) { ESTADO.vista = ESTADO.hist.pop(); render(); }
 }
 
@@ -609,7 +616,38 @@ function vistaHome() {
 }
 
 /* --- PRODUCIR: elegir producto + cantidad --- */
+/* Selector de cantidad: se puede ESCRIBIR el número o usar − / ＋ */
+function stepperHTML() {
+    return `<div class="stepper">
+            <button onclick="paso(-1)">−</button>
+            <input id="valor" class="valor" type="number" inputmode="numeric" pattern="[0-9]*" min="1" value="${ESTADO.reg.cantidad}"
+                   oninput="cantEscrita(this.value)" onfocus="this.select()">
+            <button onclick="paso(1)">＋</button>
+        </div>`;
+}
+/* Registrar desde una remisión o un envío FULL: misma pantalla que Producir, ya con el SKU, la meta y la referencia */
+function registrarEn(ctx, sku) { ESTADO.reg.ctx = ctx; ESTADO.reg.sku = sku; ESTADO.reg.cantidad = 1; ESTADO.ctxListo = true; ir('producir'); }
+function vistaRegistroContexto() {
+    const ctx = ESTADO.reg.ctx, sku = ESTADO.reg.sku;
+    const hecho = REGISTROS.filter(r => r.origen === ctx.origen && r.ref === ctx.ref && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+    const meta = ctx.meta || 0, pct = meta ? Math.min(100, Math.round(hecho / meta * 100)) : 0;
+    return header("Registrar", ctx.etiqueta) + `<main>
+        <div class="seccion-titulo">Producto (SKU) <small>${ctx.etiqueta}</small></div>
+        <div class="card" style="padding:12px 16px"><div class="sku">${ctx.nombre || prod(sku).desc}</div><div class="desc">${sku}</div></div>
+        <div class="foto-wrap"><img data-foto="${sku}" alt=""></div>
+        <div class="card">
+            <div class="item" style="padding:0"><div class="desc">Meta de ${ctx.origen === 'FULL' ? 'este envío' : 'esta remisión'} para este SKU</div><div class="cant" style="font-size:18px">${hecho}/${meta} pzs</div></div>
+            <div class="prog"><span style="width:${pct}%"></span></div>
+            <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sku)}</div></div>
+        </div>
+        <div class="seccion-titulo">Cantidad de piezas</div>
+        ${stepperHTML()}
+        <button class="btn" onclick="guardar()"><span class="ico">✓</span> Registrar producción <span class="flecha">→</span></button>
+        <div class="link" onclick="atras()">Cancelar</div>
+    </main>` + tabbar();
+}
 function vistaProducir() {
+    if (ESTADO.reg.ctx) return vistaRegistroContexto();
     const lista = machoteSKUs(ESTADO.reg.familia);
     const tabsFam = `<div class="tabs">
             <button class="${ESTADO.reg.familia==='Tapetes'?'on':''}" onclick="setFamilia('Tapetes')">Tapetes</button>
@@ -639,29 +677,32 @@ function vistaProducir() {
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sel.sku)}</div></div>
         </div>
         <div class="seccion-titulo">Cantidad de piezas</div>
-        <div class="stepper">
-            <button onclick="paso(-1)">−</button>
-            <div class="valor" id="valor">${ESTADO.reg.cantidad}</div>
-            <button onclick="paso(1)">＋</button>
-        </div>
+        ${stepperHTML()}
         <button class="btn" onclick="guardar()"><span class="ico">✓</span> Registrar producción <span class="flecha">→</span></button>
         <div class="link" onclick="ir('home')">Cancelar</div>
     </main>` + tabbar();
 }
 function setFamilia(f){ ESTADO.reg.familia=f; ESTADO.reg.sku=null; render(); }
-function paso(d){ ESTADO.reg.cantidad=Math.max(1, ESTADO.reg.cantidad+d); document.getElementById("valor").textContent=ESTADO.reg.cantidad; }
+function cantEscrita(v){ const n = parseInt(v, 10); if (n > 0) ESTADO.reg.cantidad = n; }
+function paso(d){ const el = document.getElementById("valor"); const n = parseInt(el.value, 10) || ESTADO.reg.cantidad;
+    ESTADO.reg.cantidad = Math.max(1, n + d); el.value = ESTADO.reg.cantidad; }
 async function guardar(){
-    const cant = ESTADO.reg.cantidad, sku = ESTADO.reg.sku;
+    const ctx = ESTADO.reg.ctx, sku = ESTADO.reg.sku;
+    const cant = parseInt((document.getElementById("valor") || {}).value, 10);
+    if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
+    const nombre = ctx ? (ctx.nombre || prod(sku).desc) : prod(sku).desc;
+    const familia = ctx ? (/^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "")) : ESTADO.reg.familia;
     toast("Guardando…");
     try {
         await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
-            sku: sku, desc: prod(sku).desc, familia: ESTADO.reg.familia, cantidad: cant,
-            origen: "Colecta" });   // lo del machote es Colecta (N-04)
+            sku: sku, desc: nombre, familia: familia, cantidad: cant,
+            origen: ctx ? ctx.origen : "Colecta",   // lo del machote es Colecta (N-04)
+            ref: ctx ? ctx.ref : "" });
         await cargarResumen();               // vuelve a leer lo de hoy (ya con lo nuevo)
-        toast(`✓ ${cant} pzs de ${prod(sku).desc}`);
+        toast(`✓ ${cant} pzs de ${nombre}`);
     } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
     ESTADO.reg.cantidad = 1;
-    ir("historial");
+    if (ctx) atras(); else ir("historial");   // desde una remisión/envío vuelve a esa pantalla
 }
 
 /* --- PENDIENTES: Colecta (por corte) + FULL --- */
@@ -720,7 +761,8 @@ function verSku(sku){ ESTADO.skuSel = sku; ir('skuDetalle'); }
 function vistaSkuDetalle(){
     const sku = ESTADO.skuSel;
     if (!sku) { ir('pendientes'); return ''; }
-    const info = machoteSKUs("").find(x => x.sku === sku) || { sku: sku, nombre: prod(sku).desc, familia: prod(sku).familia, meta: 0 };
+    const enMachote = !!machoteSKUs("").find(x => x.sku === sku);
+    const info = machoteSKUs("").find(x => x.sku === sku) || { sku: sku, nombre: NOMBRES[sku] || prod(sku).desc, familia: prod(sku).familia, meta: 0 };
     const hecho = producidoDe(sku);
     const pct = info.meta ? Math.min(100, Math.round(hecho / info.meta * 100)) : 0;
     const porCorte = ["C1","C2","C3"].map(c => {
@@ -730,12 +772,12 @@ function vistaSkuDetalle(){
     return header(info.nombre, sku) + `<main>
         <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
         <div class="card">
-            <div class="item" style="padding:0"><div class="desc">Producido hoy / meta</div><div class="cant" style="font-size:18px">${hecho}/${info.meta} pzs</div></div>
-            <div class="prog"><span style="width:${pct}%"></span></div>
-            <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sku)}</div></div>
+            ${enMachote ? `<div class="item" style="padding:0"><div class="desc">Producido hoy / meta</div><div class="cant" style="font-size:18px">${hecho}/${info.meta} pzs</div></div>
+            <div class="prog"><span style="width:${pct}%"></span></div>` : ``}
+            <div class="item" style="border:none;padding-top:${enMachote?8:0}px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sku)}</div></div>
         </div>
         ${porCorte ? `<div class="card">${porCorte}</div>` : ``}
-        <button class="btn" onclick="ESTADO.reg.familia='${info.familia === 'Pisos' ? 'Pisos' : 'Tapetes'}';ESTADO.reg.sku='${sku}';ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
+        ${enMachote ? `<button class="btn" onclick="ESTADO.reg.familia='${info.familia === 'Pisos' ? 'Pisos' : 'Tapetes'}';ESTADO.reg.sku='${sku}';ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>` : ``}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -784,27 +826,16 @@ function colectaPorRemision(){
 }
 function verRemision(name){ ESTADO.remSel = remisionesConAvance().find(r => r.name === name) || null; ir('remisionDetalle'); }
 // Registrar producción para una remisión de Colecta (queda en el Sheet: origen=Colecta + ref=S####). N-05.
-async function registrarRemision(sku){
+function registrarRemision(sku){
     const r = ESTADO.remSel; if (!r) return;
     const l = (r.lineas || []).find(x => x.sku === sku) || { sku: sku };
-    const txt = prompt(`¿Cuántas piezas produjiste de ${l.nombre || sku} para la remisión ${r.name}?`, "1");
-    if (txt === null) return;
-    const cant = parseInt(txt, 10);
-    if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
-    const familia = /^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "");
-    toast("Guardando…");
-    try {
-        await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
-            sku: sku, desc: l.nombre || sku, familia: familia, cantidad: cant,
-            origen: "Colecta", ref: r.name });
-        await cargarResumen();
-        toast(`✓ ${cant} pzs (${r.name})`);
-    } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
-    render();
+    registrarEn({ origen: "Colecta", ref: r.name, etiqueta: "Remisión " + r.name, meta: l.qty || 0, nombre: l.nombre || sku }, sku);
 }
 function vistaRemisionDetalle(){
-    const r = ESTADO.remSel;
+    const r0 = ESTADO.remSel;
+    const r = r0 ? (remisionesConAvance().find(x => x.name === r0.name) || r0) : null;   // avance al día
     if (!r) { ir('pendientes'); return ''; }
+    r.lineas.forEach(l => { NOMBRES[l.sku] = l.nombre || l.sku; });
     const hechoRem = sku => REGISTROS.filter(x => x.origen==='Colecta' && x.ref===r.name && x.sku===sku).reduce((a,x)=>a+x.cantidad,0);
     return header(r.name, r.canal) + `<main>
         <div class="card negra">
@@ -819,10 +850,10 @@ function vistaRemisionDetalle(){
         ${r.lineas.map(l=>{
             const h = hechoRem(l.sku);
             const pct = Math.min(100, Math.round(h / l.qty * 100));
-            return `<div class="card" style="padding:12px 16px">
+            return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}')">
                 <div class="item" style="padding:0">
                     <div><div class="sku">${h>=l.qty?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.qty}</div></div>
-                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:13px" onclick="registrarRemision('${l.sku}')">➕ Registrar</button>
+                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:13px" onclick="event.stopPropagation();registrarRemision('${l.sku}')">➕ Registrar</button>
                 </div>
                 <div class="prog"><span style="width:${pct}%"></span></div>
             </div>`;
@@ -834,39 +865,27 @@ function vistaRemisionDetalle(){
 /* --- DETALLE DE UN ENVÍO FULL: qué SKUs lleva --- */
 // "Por hacer" = se produce aquí: tapetes (MUK-TAPFOM/TAPTEC/YOG) y pisos/vinil (VIN-). El resto = terminado.
 function esPorHacer(sku){
-    const s = String(sku||"").toUpperCase();
+    const s = String(sku||"").replace(/^\[([^\]]+)\].*$/, "$1").toUpperCase();   // por si llega como "[SKU] Nombre"
     return /^VIN-/.test(s) || /^MUK-(TAPFOM|TAPTEC|YOG)/.test(s);
 }
 function verFull(envio){ ESTADO.fullSel = FULL.find(f => f.envio === envio) || null; ir('fullDetalle'); }
 // Registrar producción para un envío FULL (queda marcado origen=FULL + referencia del envío). N-04/N-05.
-async function registrarFull(sku){
+function registrarFull(sku){
     const f = ESTADO.fullSel; if (!f) return;
     const l = (f.lineas || []).find(x => x.sku === sku) || { sku: sku };
-    const txt = prompt(`¿Cuántas piezas produjiste de ${l.nombre || sku} para el envío FULL ${f.envio}?`, "1");
-    if (txt === null) return;
-    const cant = parseInt(txt, 10);
-    if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
-    const familia = /^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "");
-    toast("Guardando…");
-    try {
-        await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
-            sku: sku, desc: l.nombre || sku, familia: familia, cantidad: cant,
-            origen: "FULL", ref: f.envio });
-        await cargarResumen();
-        toast(`✓ ${cant} pzs (FULL ${f.envio})`);
-    } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
-    render();
+    registrarEn({ origen: "FULL", ref: f.envio, etiqueta: "Envío FULL " + f.envio, meta: l.piezas || 0, nombre: l.nombre || sku }, sku);
 }
 function vistaFullDetalle(){
     const f = ESTADO.fullSel;
     if (!f) { ir('pendientes'); return ''; }
     const lineas = f.lineas || [];
+    lineas.forEach(l => { NOMBRES[l.sku] = l.nombre || l.sku; });
     const porHacer  = lineas.filter(l => esPorHacer(l.sku));
     const terminado = lineas.filter(l => !esPorHacer(l.sku));
     const pzs = arr => arr.reduce((a,l)=>a + (l.piezas||0), 0);
     const hechoFull = sku => REGISTROS.filter(r => r.origen==='FULL' && r.ref===f.envio && r.sku===sku).reduce((a,r)=>a+r.cantidad,0);
     const cardLinea = l => `
-            <div class="card" style="padding:12px 16px;${l.validado?'opacity:.45':''}">
+            <div class="card" style="padding:12px 16px;cursor:pointer;${l.validado?'opacity:.45':''}" onclick="verSku('${l.sku}')">
                 <div class="item" style="padding:0">
                     <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku}${l.validado?' · ✓ listo':''}</div></div>
                     <div class="cant">${l.piezas}</div>
@@ -874,10 +893,10 @@ function vistaFullDetalle(){
             </div>`;
     const cardPorHacer = l => {
         const h = hechoFull(l.sku);
-        return `<div class="card" style="padding:12px 16px">
+        return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}')">
                 <div class="item" style="padding:0">
                     <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.piezas}</div></div>
-                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:13px" onclick="registrarFull('${l.sku}')">➕ Registrar</button>
+                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:13px" onclick="event.stopPropagation();registrarFull('${l.sku}')">➕ Registrar</button>
                 </div>
             </div>`;
     };
