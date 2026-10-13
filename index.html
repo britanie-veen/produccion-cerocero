@@ -332,6 +332,7 @@ let ESTADO = {
     usuario: null,      // { nombre, rol }
     vista: "bienvenida",// pantalla actual (arranca en la bienvenida)
     hist: [],           // memoria de navegación: pantallas por las que pasé (para la flecha ←)
+    filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
     corte: "C1",        // corte seleccionado
     colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
     reg: { familia: "Tapetes", sku: null, cantidad: 1 }, // captura en curso
@@ -589,6 +590,46 @@ function entrar(nombre) {
     else { ir("home"); }
 }
 
+/* --- RESUMEN DE HOY (inicio): lo que produce todo el equipo, por persona y por SKU, con filtro por persona --- */
+function setFiltroPersona(v) {
+    const m = $app.querySelector("main"), sc = m ? m.scrollTop : 0;
+    ESTADO.filtroPersona = v; render();
+    const m2 = $app.querySelector("main"); if (m2) m2.scrollTop = sc;   // no brinca al inicio al filtrar
+}
+function resumenHoyHTML() {
+    const f = ESTADO.filtroPersona || "";
+    const esc = t => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const corto = n => { const p = String(n).split(" "); return p.length > 1 ? p[0] + " " + p[1][0] + "." : p[0]; };   // "Rodrigo Q."
+    const regs = f ? REGISTROS.filter(r => r.persona === f) : REGISTROS;
+    const total = regs.reduce((a, r) => a + r.cantidad, 0);
+    const nombres = [...new Set(PERSONAS.map(p => p.nombre).concat(REGISTROS.map(r => r.persona)))]
+        .sort((a, b) => a.localeCompare(b, "es"));
+    // por SKU (con quién lo hizo)
+    const porSku = {};
+    regs.forEach(r => {
+        const o = porSku[r.sku] = porSku[r.sku] || { sku: r.sku, desc: r.desc || prod(r.sku).desc, total: 0, quien: {} };
+        o.total += r.cantidad; o.quien[r.persona] = (o.quien[r.persona] || 0) + r.cantidad;
+    });
+    const skus = Object.keys(porSku).map(k => porSku[k]).sort((a, b) => b.total - a.total);
+    // por persona (de todo el equipo)
+    const pp = {}; REGISTROS.forEach(r => { pp[r.persona] = (pp[r.persona] || 0) + r.cantidad; });
+    const personas = Object.keys(pp).map(n => ({ n: n, t: pp[n] })).sort((a, b) => b.t - a.t);
+    return `<div class="seccion-titulo" style="margin-top:24px">Producción de hoy <small>Todo el equipo · por persona y por SKU</small></div>
+        <select onchange="setFiltroPersona(this.value)">
+            <option value="">Todas las personas</option>
+            ${nombres.map(n => `<option value="${esc(n)}" ${n === f ? "selected" : ""}>${esc(n)}</option>`).join("")}
+        </select>
+        <div class="card negra kpi" style="margin-top:12px"><div class="num">${total}</div><div class="lbl">${f ? "piezas de " + esc(f) + " hoy" : "piezas producidas hoy (equipo)"}</div></div>
+        ${!f && personas.length ? `<div class="seccion-titulo" style="font-size:12px;margin:14px 0 8px">Por persona</div>
+            <div class="card">${personas.map(p => `<div class="item"><div class="desc">${esc(p.n)}</div><div class="cant" style="font-size:14px">${p.t} pzs</div></div>`).join("")}</div>` : ``}
+        <div class="seccion-titulo" style="font-size:12px;margin:14px 0 8px">Por SKU</div>
+        ${skus.length ? skus.map(x => `<div class="card" style="padding:12px 16px"><div class="item" style="padding:0">
+                <div><div class="sku">${esc(x.desc)}</div>
+                     <div class="desc">${esc(x.sku)}${!f ? " · " + Object.keys(x.quien).sort((a, b) => x.quien[b] - x.quien[a]).map(n => esc(corto(n)) + " " + x.quien[n]).join(" · ") : ""}</div></div>
+                <div class="cant">${x.total}</div></div></div>`).join("")
+            : `<p class="vacio">${f ? "Esta persona aún no ha registrado producción hoy." : "Aún no hay producción registrada hoy."}</p>`}`;
+}
+
 /* --- HOME OPERADOR: "lo mío" --- */
 function vistaHome() {
     const miProd = REGISTROS.filter(r => r.persona === ESTADO.usuario.nombre).reduce((a, r) => a + r.cantidad, 0);
@@ -611,6 +652,7 @@ function vistaHome() {
         </div>
         <button class="btn" onclick="ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
         <button class="btn blanco" onclick="ir('pendientes')"><span class="ico">📋</span> Ver pendientes (Colecta / FULL) <span class="flecha">→</span></button>
+        ${resumenHoyHTML()}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
