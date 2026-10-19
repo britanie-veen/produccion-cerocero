@@ -282,6 +282,9 @@ const MOTOR_URL = "https://script.google.com/macros/s/AKfycby4ZUI7hIcSVVbqFN50OE
 // ⭐ ADMINS = SOLO estas personas. Cualquiera que NO esté aquí es operador.
 // (19-oct: Claudia sale de la app; entra Sofía como admin, igual que Karla y Britanie.)
 const ADMINS = ["Britanie Ramos", "Karla González", "Sofía"];
+// Compara nombres sin acentos, mayúsculas ni espacios de más (para que "Sofia " del Sheet = "Sofía").
+const normNombre = n => String(n || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+const esAdminNombre = n => ADMINS.some(a => normNombre(a) === normNombre(n));
 const ADMIN_PIN = "1357";   // PIN del panel de administrador (lo eligió Britanie)
 
 /* ---------- 1) DATOS DE EJEMPLO (mock) ---------- */
@@ -425,7 +428,7 @@ async function cargarPersonas() {
         const j = await r.json();
         // El rol lo MANDA el código (ADMINS), no la hoja: así Claudia u otros nunca quedan admin por error.
         if (j.ok && j.personas && j.personas.length)
-            PERSONAS = j.personas.map(p => ({ nombre: p.nombre, rol: ADMINS.includes(p.nombre) ? "admin" : "operador" }));
+            PERSONAS = j.personas.map(p => ({ nombre: String(p.nombre).trim(), rol: esAdminNombre(p.nombre) ? "admin" : "operador" }));
     } catch (e) { /* sin internet: usa la lista local */ }
 }
 // Leer lo producido HOY (registros, totales, ranking) del Sheet.
