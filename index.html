@@ -329,7 +329,9 @@ let SEMANA = null;   // acumulado de la semana (lunes a hoy): { inicio, total, p
 
 /* ---------- 2) ESTADO ---------- */
 let ESTADO = {
-    usuario: null,      // { nombre, rol }
+    usuario: null,      // { nombre, rol } — en equipo: { nombre:"Equipo: A, B", integrantes:[...], rol:"operador" }
+    modo: null,         // "individual" | "equipo" — cómo produce hoy (se elige antes del login)
+    equipoSel: [],      // nombres marcados en el login de equipo (mientras se arma el equipo)
     vista: "bienvenida",// pantalla actual (arranca en la bienvenida)
     hist: [],           // memoria de navegación: pantallas por las que pasé (para la flecha ←)
     filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
@@ -398,7 +400,7 @@ function toast(msg) {
     setTimeout(() => t.classList.remove("show"), 1800);
 }
 // Pantallas "raíz" (de inicio): NO llevan flecha de atrás y reinician el historial.
-const RAICES = ["bienvenida", "login", "home", "adminPin", "adminPanel"];
+const RAICES = ["bienvenida", "modo", "login", "home", "adminPin", "adminPanel"];
 function ir(vista) {
     if (vista === 'producir' && !ESTADO.ctxListo) ESTADO.reg.ctx = null;   // Producir normal: sin remisión/envío
     ESTADO.ctxListo = false;
@@ -431,7 +433,9 @@ async function cargarResumen() {
             REGISTROS = (j.registrosHoy || []).map(x => ({
                 id: x.id, persona: x.persona, sku: x.sku, desc: x.desc,
                 familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora,
-                origen: x.origen || 'Colecta', ref: x.ref || ''
+                origen: x.origen || 'Colecta', ref: x.ref || '',
+                tipo: x.tipo || (String(x.persona).indexOf('Equipo:') === 0 ? 'Equipo' : 'Individual'),
+                integrantes: x.integrantes || ''
             }));
             SEMANA = j.semana || null;
         }
@@ -511,7 +515,7 @@ function header(titulo, sub) {
     return `<header>
         ${izq}
         <div class="titulo"><h1>${titulo}</h1><p>${sub || "Almacén CeroCero"}</p></div>
-        ${ESTADO.usuario ? `<div class="usuario">${ESTADO.usuario.nombre.split(" ")[0]}</div>` : ""}
+        ${ESTADO.usuario ? `<div class="usuario">${nombreCorto(ESTADO.usuario)}</div>` : ""}
     </header>`;
 }
 
@@ -540,12 +544,90 @@ function vistaBienvenida() {
         <h2 style="font-size:32px;margin-top:6px">Producción</h2>
         <p class="sub" style="font-size:15px">Almacén CeroCero</p>
         <div style="width:100%;max-width:280px;margin-top:38px">
-            <button class="btn" style="justify-content:center;font-size:16px" onclick="ir('login')">
+            <button class="btn" style="justify-content:center;font-size:16px" onclick="ir('modo')">
                 Entrar <span class="flecha">→</span>
             </button>
         </div>
         <div class="sello" style="margin-top:46px">CERO HUMO · CERO ATAJOS</div>
     </div>`;
+}
+
+/* --- MODO: ¿cómo produces hoy? Individual o en equipo (antes del login) --- */
+function esEquipo() { return !!(ESTADO.usuario && ESTADO.usuario.integrantes); }
+function nombreCorto(u) { return u.integrantes ? `👥 Equipo (${u.integrantes.length})` : u.nombre.split(" ")[0]; }
+function elegirModo(m) {
+    ESTADO.modo = m; ESTADO.usuario = null; ESTADO.equipoSel = [];
+    ir(m === "equipo" ? "loginEquipo" : "login");
+}
+function vistaModo() {
+    return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="logo00" style="font-size:64px">00</div>
+        <h2>¿Cómo produces hoy?</h2>
+        <p class="sub">Elige una opción para entrar</p>
+        <div style="width:100%;margin-top:28px">
+            <button class="btn" style="padding:20px 18px" onclick="elegirModo('individual')">
+                <span class="ico">🙋</span>
+                <div><div>Individual</div><div style="font-weight:100;font-size:12px;margin-top:2px">Produzco yo solo(a)</div></div>
+                <span class="flecha">→</span>
+            </button>
+            <button class="btn blanco" style="padding:20px 18px" onclick="elegirModo('equipo')">
+                <span class="ico">👥</span>
+                <div><div>En equipo</div><div style="font-weight:100;font-size:12px;margin-top:2px">Producimos entre dos o más</div></div>
+                <span class="flecha">→</span>
+            </button>
+        </div>
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </div>`;
+}
+
+/* --- LOGIN DE EQUIPO: marcar a los integrantes de hoy (mínimo 2) --- */
+function vistaLoginEquipo() {
+    const sel = ESTADO.equipoSel, n = sel.length;
+    return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="logo00" style="font-size:64px">00</div>
+        <h2>¿Quiénes van en el equipo?</h2>
+        <p class="sub">Marca a todos los integrantes de hoy (mínimo 2)</p>
+        <div id="chipsEquipo" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;min-height:28px">
+            ${sel.map(nm => `<span class="chip full" style="cursor:pointer" onclick="toggleIntegrante('${nm}')">${nm.split(" ")[0]} ✕</span>`).join("")}
+        </div>
+        <input id="buscar" class="selbox" placeholder="🔍  Busca y marca un nombre…" oninput="dibujarListaEquipo()"
+               autocomplete="off" autocorrect="off" style="margin-top:10px">
+        <div id="listaEquipo" style="max-height:38vh;overflow-y:auto;padding-right:2px">${equipoHTML("")}</div>
+        <button class="btn" style="justify-content:center;margin-top:12px;${n < 2 ? "opacity:.35" : ""}" onclick="entrarEquipo()">
+            Entrar como equipo${n ? ` (${n})` : ""} <span class="flecha">→</span>
+        </button>
+        <div class="link" onclick="ir('modo')">← Mejor entro individual</div>
+    </div>`;
+}
+function equipoHTML(filtro) {
+    const f = (filtro || "").trim().toLowerCase();
+    const lista = [...PERSONAS]
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+        .filter(p => p.nombre.toLowerCase().includes(f));
+    if (!lista.length) return `<p class="vacio">Sin resultados…</p>`;
+    return lista.map(p => {
+        const on = ESTADO.equipoSel.includes(p.nombre);
+        return `<div class="persona" style="${on ? "background:var(--negro);color:var(--blanco)" : ""}" onclick="toggleIntegrante('${p.nombre}')">
+            <div class="avatar" style="${on ? "background:var(--blanco);color:var(--negro)" : ""}">${on ? "✓" : inicial(p.nombre)}</div>
+            ${p.nombre}
+        </div>`;
+    }).join("");
+}
+function toggleIntegrante(nombre) {
+    const i = ESTADO.equipoSel.indexOf(nombre);
+    if (i >= 0) ESTADO.equipoSel.splice(i, 1); else ESTADO.equipoSel.push(nombre);
+    const b = document.getElementById("buscar"), txt = b ? b.value : "";
+    render();                                                  // redibuja chips + botón
+    const b2 = document.getElementById("buscar"); if (b2) { b2.value = txt; dibujarListaEquipo(); }
+}
+function dibujarListaEquipo() {
+    document.getElementById("listaEquipo").innerHTML = equipoHTML(document.getElementById("buscar").value);
+}
+function entrarEquipo() {
+    if (ESTADO.equipoSel.length < 2) { toast("Marca al menos a 2 personas"); return; }
+    const integrantes = [...ESTADO.equipoSel].sort((a, b) => a.localeCompare(b, 'es'));   // orden fijo → mismo nombre de equipo siempre
+    ESTADO.usuario = { nombre: "Equipo: " + integrantes.join(", "), integrantes: integrantes, rol: "operador" };
+    ir("home");
 }
 
 /* --- LOGIN: elegir tu nombre de la lista --- */
@@ -557,6 +639,7 @@ function vistaLogin() {
         <input id="buscar" class="selbox" placeholder="🔍  Toca aquí y busca tu nombre…" onfocus="abrirLista()"
                oninput="filtrarPersonas()" autocomplete="off" autocorrect="off" style="margin-top:20px">
         <div id="listaPersonas" style="display:none;max-height:46vh;overflow-y:auto;padding-right:2px"></div>
+        <div class="link" onclick="ir('modo')">← Cambiar: ¿individual o en equipo?</div>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </div>`;
 }
@@ -645,7 +728,7 @@ function vistaHome() {
         </div>` : ``}
         <div class="card negra kpi">
             <div class="num">${miProd}</div>
-            <div class="lbl">piezas que TÚ produjiste hoy</div>
+            <div class="lbl">${esEquipo() ? "piezas que su EQUIPO produjo hoy" : "piezas que TÚ produjiste hoy"}</div>
         </div>
         <div class="fila-kpis">
             <div class="card kpi"><div class="num">${totalHoy()}</div><div class="lbl">total del equipo hoy</div></div>
@@ -740,7 +823,9 @@ async function guardar(){
         await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
             sku: sku, desc: nombre, familia: familia, cantidad: cant,
             origen: ctx ? ctx.origen : "Colecta",   // lo del machote es Colecta (N-04)
-            ref: ctx ? ctx.ref : "" });
+            ref: ctx ? ctx.ref : "",
+            tipo: esEquipo() ? "Equipo" : "Individual",            // Fase 1: producción por equipo o individual
+            integrantes: esEquipo() ? ESTADO.usuario.integrantes.join(", ") : "" });
         await cargarResumen();               // vuelve a leer lo de hoy (ya con lo nuevo)
         toast(`✓ ${cant} pzs de ${nombre}`);
     } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
@@ -1083,11 +1168,16 @@ function vistaAdminPanel(){
                 </div>`).join("")}
         </div>
         ${SEMANA.ranking.length ? `<div class="card">
-            <div class="sku" style="margin-bottom:8px">Por persona (semana)</div>
-            ${SEMANA.ranking.map((p,i)=>`
+            <div class="sku" style="margin-bottom:8px">Individual (semana)</div>
+            ${SEMANA.ranking.filter(p=>!esRegEquipo(p)).map((p,i)=>`
                 <div class="item" style="padding:6px 0">
                     <div><span class="desc">${i+1}.</span> ${p.persona}</div><div class="cant">${p.piezas}</div>
-                </div>`).join("")}
+                </div>`).join("") || `<p class="desc">Sin producción individual esta semana.</p>`}
+            <div class="sku" style="margin:14px 0 8px">Equipos (semana)</div>
+            ${SEMANA.ranking.filter(esRegEquipo).map((p,i)=>`
+                <div class="item" style="padding:6px 0">
+                    <div><span class="desc">${i+1}.</span> ${p.persona}</div><div class="cant">${p.piezas}</div>
+                </div>`).join("") || `<p class="desc">Sin producción en equipo esta semana.</p>`}
         </div>` : ``}
         ` : ``}
         <div class="card">
@@ -1110,40 +1200,52 @@ function vistaAdminPanel(){
     </main>` + tabbarAdmin();
 }
 
+/* Suma de hoy por quien produjo, partida en Individual / Equipos (Fase 1) */
+function esRegEquipo(r){ return r.tipo === 'Equipo' || String(r.persona).indexOf('Equipo:') === 0; }
+function sumarPor(regs){
+    const pp = {}; regs.forEach(r => pp[r.persona] = (pp[r.persona]||0)+r.cantidad);
+    return Object.entries(pp).sort((a,b)=>b[1]-a[1]);
+}
 function vistaAdminPersona(){
-    const porPersona = {};
-    REGISTROS.forEach(r => porPersona[r.persona] = (porPersona[r.persona]||0)+r.cantidad);
-    const filas = Object.entries(porPersona).sort((a,b)=>b[1]-a[1]);
-    const max = filas.length ? filas[0][1] : 1;
-    return header("Por persona", "Producción de hoy") + `<main>
-        <div class="seccion-titulo">Producción de hoy por persona</div>
-        ${filas.length ? filas.map(([n,c])=>`
+    const ind = sumarPor(REGISTROS.filter(r => !esRegEquipo(r)));
+    const eq  = sumarPor(REGISTROS.filter(esRegEquipo));
+    const bloque = (filas, vacio) => {
+        const max = filas.length ? filas[0][1] : 1;
+        return filas.length ? filas.map(([n,c])=>`
             <div class="card">
                 <div class="item" style="padding:0">
-                    <div class="avatar" style="width:34px;height:34px;font-size:13px">${inicial(n)}</div>
+                    <div class="avatar" style="width:34px;height:34px;font-size:13px">${esRegEquipo({persona:n}) ? "👥" : inicial(n)}</div>
                     <div class="sku">${n}</div><div class="cant">${c} pzs</div>
                 </div>
                 <div class="prog"><span style="width:${Math.round(c/max*100)}%"></span></div>
-            </div>`).join("") : `<p class="vacio">Aún no hay producción hoy.</p>`}
+            </div>`).join("") : `<p class="vacio">${vacio}</p>`;
+    };
+    return header("Por persona", "Producción de hoy") + `<main>
+        <div class="seccion-titulo">Individual <small>Quienes trabajaron solos hoy</small></div>
+        ${bloque(ind, "Nadie ha registrado producción individual hoy.")}
+        <div class="seccion-titulo" style="margin-top:24px">Equipos <small>La producción cuenta para el equipo completo</small></div>
+        ${bloque(eq, "Hoy no se ha registrado producción en equipo.")}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
 
 function vistaAdminRanking(){
-    const porPersona = {};
-    REGISTROS.forEach(r => porPersona[r.persona] = (porPersona[r.persona]||0)+r.cantidad);
-    const filas = Object.entries(porPersona).sort((a,b)=>b[1]-a[1]);
     const medallas = ["🥇","🥈","🥉"];
-    return header("Ranking", "Desempeño del día") + `<main>
-        <div class="seccion-titulo">Quién va mejor hoy <small>Por piezas producidas</small></div>
-        ${filas.length ? filas.map(([n,c],i)=>`
+    const podio = (filas, vacio) => filas.length ? filas.map(([n,c],i)=>`
             <div class="card ${i===0?'negra':''}">
                 <div class="item" style="padding:0">
                     <div style="font-size:24px;width:34px;text-align:center">${medallas[i]||(i+1)}</div>
                     <div class="sku" style="${i===0?'color:#fff':''}">${n}</div>
                     <div class="cant">${c} pzs</div>
                 </div>
-            </div>`).join("") : `<p class="vacio">Aún no hay producción hoy.</p>`}
+            </div>`).join("") : `<p class="vacio">${vacio}</p>`;
+    const ind = sumarPor(REGISTROS.filter(r => !esRegEquipo(r)));
+    const eq  = sumarPor(REGISTROS.filter(esRegEquipo));
+    return header("Ranking", "Desempeño del día") + `<main>
+        <div class="seccion-titulo">🙋 Individual <small>Quién va mejor hoy, por piezas</small></div>
+        ${podio(ind, "Aún no hay producción individual hoy.")}
+        <div class="seccion-titulo" style="margin-top:24px">👥 Equipos <small>Mejor equipo de hoy (nombres completos)</small></div>
+        ${podio(eq, "Aún no hay producción en equipo hoy.")}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
@@ -1154,7 +1256,7 @@ function vistaAdminRanking(){
 function render() {
     if (RAICES.includes(ESTADO.vista)) ESTADO.hist = [];   // en una pantalla de inicio, no hay "atrás"
     const vistas = {
-        bienvenida: vistaBienvenida,
+        bienvenida: vistaBienvenida, modo: vistaModo, loginEquipo: vistaLoginEquipo,
         login: vistaLogin, home: vistaHome, producir: vistaProducir,
         pendientes: vistaPendientes, skuDetalle: vistaSkuDetalle, fullDetalle: vistaFullDetalle,
         remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial,
