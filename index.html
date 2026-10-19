@@ -326,6 +326,8 @@ let NOMBRES = {};   // sku -> nombre, de las líneas de remisiones/FULL que se h
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
 let SEMANA = null;   // acumulado de la semana (lunes a hoy): { inicio, total, porDia[], ranking[] }
+let MES = null;      // Fase 2: colchón del mes { basePedidos, objetivoColchon, colchonProducido, colchonPendiente, factor }
+let TOPREM = null;   // Fase 2: SKUs más repetidos en remisiones de Odoo (últimos 30 días) { desde, dias, top:[{sku,nombre,remisiones,piezas}] }
 
 /* ---------- 2) ESTADO ---------- */
 let ESTADO = {
@@ -438,7 +440,16 @@ async function cargarResumen() {
                 integrantes: x.integrantes || ''
             }));
             SEMANA = j.semana || null;
+            MES = j.mes || null;
         }
+    } catch (e) { /* sin internet: deja lo que haya */ }
+}
+// Fase 2: leer los SKUs más repetidos en remisiones (guía post-meta / colchón).
+async function cargarColchon() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=colchon");
+        const j = await r.json();
+        if (j && j.ok) TOPREM = j;
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Leer el MACHOTE de hoy (qué producir por corte) del motor.
@@ -475,6 +486,46 @@ async function cargarStock() {
 }
 // Texto del stock de un SKU ("40 pzs" o "—" si no lo hay).
 function stockTxt(sku){ return (STOCK[sku] !== undefined) ? Number(STOCK[sku]).toLocaleString('es-MX') + ' pzs' : '—'; }
+
+/* ---------- Fase 2: COLCHÓN DEL MES + GUÍA POST-META ---------- */
+// Piezas que FALTAN hoy del machote (meta − producido, solo positivos). 0 = el día ya está cubierto.
+function pendienteHoy(){ return machoteSKUs("").reduce((a, s) => a + Math.max(0, s.meta - producidoDe(s.sku)), 0); }
+// Lista para el colchón: los SKUs que más se repiten en remisiones, SOLO los que se fabrican (tapetes/pisos).
+function colchonLista(n){ return ((TOPREM && TOPREM.top) || []).filter(t => esPorHacer(t.sku)).slice(0, n || 8); }
+function colchonHoyDe(sku){ return REGISTROS.filter(r => r.origen === 'Colchón' && r.sku === sku).reduce((a, r) => a + r.cantidad, 0); }
+function registrarColchon(sku){
+    const t = ((TOPREM && TOPREM.top) || []).find(x => x.sku === sku) || {};
+    registrarEn({ origen: "Colchón", ref: "", etiqueta: "Colchón del mes", meta: 0, nombre: t.nombre || prod(sku).desc, remisiones: t.remisiones || 0 }, sku);
+}
+function origenTxt(r){
+    if (r.origen === 'FULL')    return '📦 FULL' + (r.ref ? ' ' + r.ref : '');
+    if (r.origen === 'Colchón') return '🧱 Colchón';
+    return '🧺 Colecta' + (r.ref ? ' ' + r.ref : '');
+}
+// Tarjeta del colchón del mes (operador y admin): objetivo = 30% de lo producido para pedidos en el mes.
+function colchonKpiHTML(negra){
+    if (!MES) return "";
+    const pct = MES.objetivoColchon ? Math.min(100, Math.round(MES.colchonProducido / MES.objetivoColchon * 100)) : 0;
+    return `<div class="card ${negra ? 'negra' : ''}">
+        <div class="item" style="padding:0"><div class="sku" style="${negra?'color:#fff':''}">🧱 Colchón del mes</div><div class="cant" style="font-size:18px">${MES.colchonProducido}/${MES.objetivoColchon} pzs</div></div>
+        <div class="prog"><span style="width:${pct}%"></span></div>
+        <div class="desc" style="margin-top:8px;${negra?'color:rgba(255,255,255,.7)':''}">${Math.round(MES.factor*100)}% de las ${MES.basePedidos.toLocaleString('es-MX')} pzs producidas para pedidos este mes · faltan ${MES.colchonPendiente}</div>
+    </div>`;
+}
+// Guía post-meta: lista de SKUs del colchón con botón ➕ (ordenados por cuántas remisiones los piden).
+function colchonListaHTML(n){
+    const lista = colchonLista(n);
+    if (!lista.length) return `<p class="vacio">${TOPREM ? "Aún no hay remisiones recientes para sugerir." : "Cargando remisiones de Odoo…"}</p>`;
+    return lista.map((t, i) => `
+        <div class="card" style="padding:12px 16px">
+            <div class="item" style="padding:0">
+                <div style="font-size:18px;width:28px;text-align:center;color:var(--gris)">${i + 1}</div>
+                <div style="flex:1"><div class="sku">${t.nombre}</div>
+                    <div class="desc">${t.sku} · en ${t.remisiones} remisiones · stock ${stockTxt(t.sku)}${colchonHoyDe(t.sku) ? ' · hoy +' + colchonHoyDe(t.sku) : ''}</div></div>
+                <button class="btn" style="width:auto;margin:0;padding:10px 14px" onclick="registrarColchon('${t.sku}')">➕ Registrar</button>
+            </div>
+        </div>`).join("");
+}
 // Foto de un SKU: se pide al motor solo cuando se va a ver y se recuerda mientras la app está abierta.
 function mimeDe(b64){ return b64.startsWith("iVBOR") ? "image/png" : b64.startsWith("UklGR") ? "image/webp" : "image/jpeg"; }
 async function cargarFoto(sku) {
@@ -726,6 +777,11 @@ function vistaHome() {
             <b>Empieza por: ${empieza.nombre}</b>
             <span>Faltan ${gapMax} de ${empieza.meta} pzs por producir hoy.</span>
         </div>` : ``}
+        ${(!empieza && pendienteHoy() === 0) ? `<div class="aviso">
+            <b>🎉 Lo de hoy ya está cubierto. Sigue con el colchón:</b>
+            <span>Lo que más piden en remisiones (últimos ${(TOPREM && TOPREM.dias) || 30} días). No te quedes en cero.</span>
+        </div>
+        ${colchonListaHTML(5)}` : ``}
         <div class="card negra kpi">
             <div class="num">${miProd}</div>
             <div class="lbl">${esEquipo() ? "piezas que su EQUIPO produjo hoy" : "piezas que TÚ produjiste hoy"}</div>
@@ -734,6 +790,7 @@ function vistaHome() {
             <div class="card kpi"><div class="num">${totalHoy()}</div><div class="lbl">total del equipo hoy</div></div>
             <div class="card kpi"><div class="num">${FULL.length}</div><div class="lbl">envíos FULL por hacer</div></div>
         </div>
+        ${colchonKpiHTML(false)}
         <button class="btn" onclick="ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
         <button class="btn blanco" onclick="ir('pendientes')"><span class="ico">📋</span> Ver pendientes (Colecta / FULL) <span class="flecha">→</span></button>
         ${resumenHoyHTML()}
@@ -762,8 +819,11 @@ function vistaRegistroContexto() {
         <div class="card" style="padding:12px 16px"><div class="sku">${ctx.nombre || prod(sku).desc}</div><div class="desc">${sku}</div></div>
         <div class="foto-wrap"><img data-foto="${sku}" alt=""></div>
         <div class="card">
-            <div class="item" style="padding:0"><div class="desc">Meta de ${ctx.origen === 'FULL' ? 'este envío' : 'esta remisión'} para este SKU</div><div class="cant" style="font-size:18px">${hecho}/${meta} pzs</div></div>
-            <div class="prog"><span style="width:${pct}%"></span></div>
+            ${ctx.origen === 'Colchón'
+                ? `<div class="item" style="padding:0"><div class="desc">Producido hoy para el colchón (este SKU)</div><div class="cant" style="font-size:18px">${hecho} pzs</div></div>
+                   <div class="item" style="border:none;padding-top:8px"><div class="desc">Pedido en ${ctx.remisiones || 0} remisiones (últimos ${(TOPREM && TOPREM.dias) || 30} días)</div><div class="cant" style="font-size:14px">${MES ? 'faltan ' + MES.colchonPendiente + ' del mes' : ''}</div></div>`
+                : `<div class="item" style="padding:0"><div class="desc">Meta de ${ctx.origen === 'FULL' ? 'este envío' : 'esta remisión'} para este SKU</div><div class="cant" style="font-size:18px">${hecho}/${meta} pzs</div></div>
+                   <div class="prog"><span style="width:${pct}%"></span></div>`}
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:14px">${stockTxt(sku)}</div></div>
         </div>
         <div class="seccion-titulo">Cantidad de piezas</div>
@@ -855,6 +915,9 @@ function vistaPendientes(){
                 <div class="item" style="border:none;padding-top:4px"><div class="desc">Por preparar</div><div class="cant" style="font-size:14px">${f.piezasPendientes} pzs · ${f.skus} SKUs <span style="color:var(--gris)">›</span></div></div>
             </div>`;
         }).join("") : `<p class="vacio">No hay envíos FULL pendientes. 🎉</p>`}
+        <div class="seccion-titulo" style="margin-top:24px">🧱 Colchón del mes <small>Lo que más piden en remisiones de Odoo (${(TOPREM && TOPREM.dias) || 30} días) · para no quedarse en cero</small></div>
+        ${colchonKpiHTML(false)}
+        ${colchonListaHTML(8)}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -1051,7 +1114,7 @@ function filaHistorial(r) {
                 <div class="item" style="padding:0">
                     <div class="avatar" style="width:34px;height:34px;font-size:13px">${inicial(r.persona)}</div>
                     <div><div class="sku">${r.desc || prod(r.sku).desc} · ${r.cantidad} pzs</div>
-                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span> · ${r.origen==='FULL'?('📦 FULL'+(r.ref?' '+r.ref:'')):('🧺 Colecta'+(r.ref?' '+r.ref:''))}</div></div>
+                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span> · ${origenTxt(r)}</div></div>
                     <div class="cant" style="font-size:13px;color:var(--gris);cursor:pointer" onclick="deshacer('${r.id}')">Deshacer</div>
                 </div>
             </div>`;
@@ -1142,8 +1205,9 @@ function vistaAdminPanel(){
     const rems = remisionesConAvance();
     const remCompletas = rems.filter(r=>r.completa).length;
     const maxDia = SEMANA ? Math.max(1, ...SEMANA.porDia.map(x=>x.piezas)) : 1;
-    const colectaHoy = REGISTROS.filter(r=>r.origen!=='FULL').reduce((a,r)=>a+r.cantidad,0);
+    const colectaHoy = REGISTROS.filter(r=>r.origen!=='FULL' && r.origen!=='Colchón').reduce((a,r)=>a+r.cantidad,0);
     const fullHoy    = REGISTROS.filter(r=>r.origen==='FULL').reduce((a,r)=>a+r.cantidad,0);
+    const colchonHoy = REGISTROS.filter(r=>r.origen==='Colchón').reduce((a,r)=>a+r.cantidad,0);
     return header("Panel general", "Todos · hoy") + `<main>
         ${avisoMachote()}
         <div class="fila-kpis">
@@ -1151,10 +1215,12 @@ function vistaAdminPanel(){
             <div class="card kpi"><div class="num">${personasHoy}</div><div class="lbl">personas activas hoy</div></div>
         </div>
         <div class="card">
-            <div class="item" style="padding:0"><div class="sku">Hoy por origen</div><div class="desc">Colecta vs FULL</div></div>
+            <div class="item" style="padding:0"><div class="sku">Hoy por origen</div><div class="desc">Colecta · FULL · Colchón</div></div>
             <div class="item" style="border:none;padding-top:8px"><div class="desc">🧺 Colecta</div><div class="cant">${colectaHoy} pzs</div></div>
             <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${fullHoy} pzs</div></div>
+            <div class="item" style="border:none"><div class="desc">🧱 Colchón</div><div class="cant">${colchonHoy} pzs</div></div>
         </div>
+        ${colchonKpiHTML(true)}
         ${SEMANA ? `
         <div class="seccion-titulo" style="margin-top:20px">Producción de la semana <small>lunes a hoy</small></div>
         <div class="card negra kpi"><div class="num">${SEMANA.total}</div><div class="lbl">piezas producidas esta semana (equipo)</div></div>
@@ -1272,7 +1338,7 @@ render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
 (async () => {
-    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock()]);
+    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon()]);
     render();
 })();
 
