@@ -327,7 +327,8 @@ let NOMBRES = {};   // sku -> nombre, de las líneas de remisiones/FULL que se h
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
 let SEMANA = null;   // acumulado de la semana (lunes a hoy): { inicio, total, porDia[], ranking[] }
 let MES = null;      // Fase 2: colchón del mes { basePedidos, objetivoColchon, colchonProducido, colchonPendiente, factor }
-let TOPREM = null;   // Fase 2: SKUs más repetidos en remisiones de Odoo (últimos 30 días) { desde, dias, top:[{sku,nombre,remisiones,piezas}] }
+let TOPREM = null;
+let CIERRES = [];    // Fase 2: cierre por mes [{mes, basePedidos, objetivoColchon, colchonProducido, alcanzado, pct, extras[]}]   // Fase 2: SKUs más repetidos en remisiones de Odoo (últimos 30 días) { desde, dias, top:[{sku,nombre,remisiones,piezas}] }
 
 /* ---------- 2) ESTADO ---------- */
 let ESTADO = {
@@ -338,6 +339,7 @@ let ESTADO = {
     hist: [],           // memoria de navegación: pantallas por las que pasé (para la flecha ←)
     filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
     filtroHist: "",     // filtro del historial del administrador ("" = todas las personas)
+    mesSel: "",         // mes elegido en "Cierre de mes" del admin ("" = el más reciente)
     corte: "C1",        // corte seleccionado
     colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
     reg: { familia: "Tapetes", sku: null, cantidad: 1 }, // captura en curso
@@ -441,6 +443,7 @@ async function cargarResumen() {
             }));
             SEMANA = j.semana || null;
             MES = j.mes || null;
+            CIERRES = j.cierres || [];
         }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
@@ -490,6 +493,34 @@ function stockTxt(sku){ return (STOCK[sku] !== undefined) ? Number(STOCK[sku]).t
 /* ---------- Fase 2: COLCHÓN DEL MES + GUÍA POST-META ---------- */
 // Piezas que FALTAN hoy del machote (meta − producido, solo positivos). 0 = el día ya está cubierto.
 function pendienteHoy(){ return machoteSKUs("").reduce((a, s) => a + Math.max(0, s.meta - producidoDe(s.sku)), 0); }
+// La guía del colchón SOLO es referencia cuando ya terminaron lo de remisiones (machote) Y los envíos FULL.
+function todoCubierto(){ return pendienteHoy() === 0 && FULL.every(f => !(Number(f.piezasPendientes) > 0)); }
+function mesBonito(k){ const m=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]; const p=String(k).split("-");
+    return p.length===2 ? m[Number(p[1])-1]+" "+p[0] : k; }
+// Cierre de mes (admin): ¿alcanzaron el 30%? + lista de extras.
+function cierreMesHTML(){
+    if (!CIERRES.length) return `<p class="vacio">Aún no hay producción registrada en ningún mes.</p>`;
+    const k = ESTADO.mesSel || CIERRES[0].mes, c = CIERRES.find(x => x.mes === k) || CIERRES[0];
+    const esActual = c.mes === fechaISOhoy().slice(0,7);
+    return `<select onchange="ESTADO.mesSel=this.value;render()">
+            ${CIERRES.map(x => `<option value="${x.mes}" ${x.mes===c.mes?'selected':''}>${mesBonito(x.mes)}${x.mes===fechaISOhoy().slice(0,7)?' (en curso)':''}</option>`).join("")}
+        </select>
+        <div class="card ${c.alcanzado?'negra':''}" style="margin-top:12px">
+            <div class="item" style="padding:0">
+                <div class="sku" style="${c.alcanzado?'color:#fff':''}">${c.alcanzado ? '✅ Alcanzaron el ' : (esActual ? '⏳ Van al ' : '❌ No alcanzaron el ')}${Math.round((MES&&MES.factor||0.3)*100)}% de colchón</div>
+                <div class="cant" style="font-size:18px">${c.pct}%</div>
+            </div>
+            <div class="prog"><span style="width:${Math.min(100,c.pct)}%"></span></div>
+            <div class="desc" style="margin-top:8px;${c.alcanzado?'color:rgba(255,255,255,.7)':''}">${c.colchonProducido} pzs de colchón · objetivo ${c.objetivoColchon} (30% de ${c.basePedidos.toLocaleString('es-MX')} pzs para pedidos)</div>
+        </div>
+        <div class="seccion-titulo" style="margin-top:14px">Extras del mes <small>Piezas de colchón por SKU, de mayor a menor</small></div>
+        ${c.extras.length ? c.extras.map((e,i)=>`
+            <div class="card" style="padding:10px 16px"><div class="item" style="padding:0">
+                <div style="width:28px;text-align:center;color:var(--gris)">${i+1}</div>
+                <div style="flex:1"><div class="sku">${e.nombre}</div><div class="desc">${e.sku}</div></div>
+                <div class="cant">${e.piezas} pzs</div>
+            </div></div>`).join("") : `<p class="vacio">No se registró colchón en ${mesBonito(c.mes)}.</p>`}`;
+}
 // Lista para el colchón: los SKUs que más se repiten en remisiones, SOLO los que se fabrican (tapetes/pisos).
 function colchonLista(n){ return ((TOPREM && TOPREM.top) || []).filter(t => esPorHacer(t.sku)).slice(0, n || 8); }
 function colchonHoyDe(sku){ return REGISTROS.filter(r => r.origen === 'Colchón' && r.sku === sku).reduce((a, r) => a + r.cantidad, 0); }
@@ -777,8 +808,8 @@ function vistaHome() {
             <b>Empieza por: ${empieza.nombre}</b>
             <span>Faltan ${gapMax} de ${empieza.meta} pzs por producir hoy.</span>
         </div>` : ``}
-        ${(!empieza && pendienteHoy() === 0) ? `<div class="aviso">
-            <b>🎉 Lo de hoy ya está cubierto. Sigue con el colchón:</b>
+        ${(!empieza && todoCubierto()) ? `<div class="aviso">
+            <b>🎉 Remisiones y FULL ya están cubiertos. Sigue con el colchón:</b>
             <span>Lo que más piden en remisiones (últimos ${(TOPREM && TOPREM.dias) || 30} días). No te quedes en cero.</span>
         </div>
         ${colchonListaHTML(5)}` : ``}
@@ -915,9 +946,9 @@ function vistaPendientes(){
                 <div class="item" style="border:none;padding-top:4px"><div class="desc">Por preparar</div><div class="cant" style="font-size:14px">${f.piezasPendientes} pzs · ${f.skus} SKUs <span style="color:var(--gris)">›</span></div></div>
             </div>`;
         }).join("") : `<p class="vacio">No hay envíos FULL pendientes. 🎉</p>`}
-        <div class="seccion-titulo" style="margin-top:24px">🧱 Colchón del mes <small>Lo que más piden en remisiones de Odoo (${(TOPREM && TOPREM.dias) || 30} días) · para no quedarse en cero</small></div>
+        <div class="seccion-titulo" style="margin-top:24px">🧱 Colchón del mes <small>Referencia para cuando ya terminaron remisiones y FULL</small></div>
         ${colchonKpiHTML(false)}
-        ${colchonListaHTML(8)}
+        ${todoCubierto() ? colchonListaHTML(8) : `<p class="vacio">Primero lo de hoy (remisiones y FULL). Cuando esté cubierto, aquí verás qué producir para el colchón.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -1220,7 +1251,8 @@ function vistaAdminPanel(){
             <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${fullHoy} pzs</div></div>
             <div class="item" style="border:none"><div class="desc">🧱 Colchón</div><div class="cant">${colchonHoy} pzs</div></div>
         </div>
-        ${colchonKpiHTML(true)}
+        <div class="seccion-titulo" style="margin-top:20px">Cierre de mes <small>¿Alcanzaron el 30% de colchón? y cuáles fueron los extras</small></div>
+        ${cierreMesHTML()}
         ${SEMANA ? `
         <div class="seccion-titulo" style="margin-top:20px">Producción de la semana <small>lunes a hoy</small></div>
         <div class="card negra kpi"><div class="num">${SEMANA.total}</div><div class="lbl">piezas producidas esta semana (equipo)</div></div>
