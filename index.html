@@ -270,6 +270,11 @@
         .pantalla .logo00 { font-weight: 900; font-size:calc(90px * var(--esc)); letter-spacing: -6px; line-height: .9; color: var(--negro); }
         .pantalla h2 { font-weight: 900; font-size:calc(24px * var(--esc)); margin-top: 18px; }
         .pantalla p.sub { font-weight: 100; font-size:calc(14px * var(--esc)); color: var(--gris); margin-top: 6px; }
+        /* 20-oct: flecha de regreso arriba en las pantallas de entrada (modo / nombre / equipo) */
+        .pantalla .volver { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+                            font-weight: 900; font-size:calc(15px * var(--esc)); color: var(--negro); margin: -14px 0 18px -4px; padding: 6px 4px; }
+        .pantalla .volver span { font-size:calc(24px * var(--esc)); line-height: 1; }
+        .pantalla .volver:active { opacity: .55; }
 
         /* Toast (aviso emergente) */
         #toast {
@@ -832,6 +837,7 @@ function elegirModo(m) {
 }
 function vistaModo() {
     return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="volver" onclick="ir('bienvenida')"><span>←</span> Regresar</div>
         <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
         <h2>¿Cómo produces hoy?</h2>
         <p class="sub">Elige una opción para entrar</p>
@@ -856,6 +862,7 @@ function vistaModo() {
 function vistaLoginEquipo() {
     const sel = ESTADO.equipoSel, n = sel.length;
     return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="volver" onclick="ir('modo')"><span>←</span> Regresar</div>
         <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
         <h2>¿Quiénes van en el equipo?</h2>
         <p class="sub">Marca a todos los integrantes de hoy (mínimo 2)</p>
@@ -906,6 +913,7 @@ function entrarEquipo() {
 /* --- LOGIN: elegir tu nombre de la lista --- */
 function vistaLogin() {
     return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="volver" onclick="ir('modo')"><span>←</span> Regresar</div>
         <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
         <h2>Producción</h2>
         <p class="sub">Busca y elige tu nombre</p>
