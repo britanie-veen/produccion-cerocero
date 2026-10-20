@@ -1292,7 +1292,7 @@ function colectaPorSKU(){
         const hecho = producidoDe(m.sku);
         const pct = Math.min(100, Math.round(hecho / m.meta * 100));
         return `<div class="card" style="cursor:pointer" onclick="verSku('${m.sku}')">
-            <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku} · Stock ${stockTxt(m.sku)}</div></div>
+            <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku} · Stock ${stockTxt(m.sku)}${extrasTxt(m.sku, 'Machote')}</div></div>
                 <div class="cant">${hecho}/${m.meta} <span style="color:var(--gris)">›</span></div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
         </div>`;
@@ -1352,7 +1352,8 @@ function vistaSkuDetalle(){
         <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
         <div class="card">
             ${enMachote ? `<div class="item" style="padding:0"><div class="desc">Producido hoy / meta</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${info.meta} pzs</div></div>
-            <div class="prog"><span style="width:${pct}%"></span></div>` : ``}
+            <div class="prog"><span style="width:${pct}%"></span></div>
+            ${extrasDe(sku, 'Machote') ? `<div class="desc" style="margin-top:8px">De estas, <b>${extrasDe(sku, 'Machote')}</b> fueron extra y ya cuentan para el 🧱 colchón del mes.</div>` : ``}` : ``}
             <div class="item" style="border:none;padding-top:${enMachote?8:0}px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sku)}</div></div>
         </div>
         ${porCorte ? `<div class="card">${porCorte}</div>` : ``}
