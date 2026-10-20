@@ -90,6 +90,22 @@
         }
         header .usuario.toca { cursor: pointer; }          /* 20-oct: la pastilla abre "Mi equipo" (cambiar / salir) */
         header .usuario.toca:active { opacity: .6; }
+        /* 20-oct: botón ↻ "Actualizar" (vuelve a pedir todo al motor sin salir de la app) */
+        header .refrescar {
+            width: calc(34px * var(--esc)); height: calc(34px * var(--esc)); border-radius: 50%;
+            border: 1px solid rgba(255,255,255,.35); background: transparent; color: var(--blanco);
+            font-size: calc(18px * var(--esc)); line-height: 1; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; flex: none; padding: 0;
+        }
+        header .refrescar:active { opacity: .6; }
+        header .refrescar.girando span { display: inline-block; animation: girar .9s linear infinite; }
+        @keyframes girar { to { transform: rotate(360deg); } }
+        .aviso-flotante {
+            position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+            background: var(--negro); color: var(--blanco); padding: 10px 16px; border-radius: 20px;
+            font-size: calc(13px * var(--esc)); font-weight: 600; z-index: 50; box-shadow: 0 4px 14px rgba(0,0,0,.25);
+            white-space: nowrap; pointer-events: none;
+        }
         /* Flecha de regresar (aparece en pantallas que NO son de inicio) */
         header .btn-atras {
             background: none; border: none; color: var(--blanco);
@@ -467,6 +483,7 @@ async function cargarResumen() {
     try {
         const r = await fetch(MOTOR_URL + "?action=resumen");
         const j = await r.json();
+        if (!j.ok) return false;
         if (j.ok) {
             REGISTROS = (j.registrosHoy || []).map(x => ({
                 id: x.id, persona: x.persona, sku: x.sku, desc: x.desc,
@@ -479,7 +496,35 @@ async function cargarResumen() {
             MES = j.mes || null;
             CIERRES = j.cierres || [];
         }
-    } catch (e) { /* sin internet: deja lo que haya */ }
+        return true;
+    } catch (e) { return false; /* sin internet: deja lo que haya */ }
+}
+
+/* 20-oct: botón ↻ ACTUALIZAR — vuelve a pedir todo al motor (cortes, FULL, Colecta, resumen, stock, colchón)
+   y redibuja la pantalla donde estés, sin salir de la app. Antes solo se cargaba al abrir: en la tablet no
+   aparecía el Corte 3 hasta cerrar y volver a entrar. */
+const VISTAS_REFRESCAR = ["home", "producir", "pendientes", "skuDetalle", "fullDetalle", "remisionDetalle", "historial", "sesion",
+                          "adminPanel", "adminPersona", "adminRanking", "adminHistorial"];
+function botonRefrescar() {
+    if (!ESTADO.usuario || !VISTAS_REFRESCAR.includes(ESTADO.vista)) return "";
+    if (ESTADO.vista === "producir" && ESTADO.reg.ctx) return "";            // en el formulario de cantidad no se refresca
+    return `<button class="refrescar ${ESTADO.refrescando ? 'girando' : ''}" onclick="refrescar()" title="Actualizar" aria-label="Actualizar"><span>↻</span></button>`;
+}
+function avisoFlotante(texto) {
+    document.querySelectorAll(".aviso-flotante").forEach(e => e.remove());
+    const d = document.createElement("div"); d.className = "aviso-flotante"; d.textContent = texto;
+    document.body.appendChild(d); setTimeout(() => d.remove(), 1800);
+}
+async function refrescar() {
+    if (ESTADO.refrescando) return;
+    ESTADO.refrescando = true;
+    const b = document.querySelector("header .refrescar"); if (b) b.classList.add("girando");
+    const res = await Promise.all([cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon()]);
+    ESTADO.refrescando = false;
+    const m = document.querySelector("main"), sc = m ? m.scrollTop : 0;
+    render();
+    const m2 = document.querySelector("main"); if (m2) m2.scrollTop = sc;   // conserva el scroll
+    avisoFlotante(res[0] ? "✓ Actualizado " + horaAhora() : "Sin conexión: se muestra lo último que se cargó");
 }
 // Fase 2: leer los SKUs más repetidos en remisiones (guía post-meta / colchón).
 async function cargarColchon() {
@@ -716,6 +761,7 @@ function header(titulo, sub) {
     return `<header>
         ${izq}
         <div class="titulo"><h1>${titulo}</h1><p>${sub || "Almacén CeroCero"}</p></div>
+        ${botonRefrescar()}
         ${ESTADO.usuario ? (ESTADO.usuario.rol === "admin"
             ? `<div class="usuario">${nombreCorto(ESTADO.usuario)}</div>`
             : `<div class="usuario toca" onclick="ir('sesion')" title="Cambiar de equipo o salir">${nombreCorto(ESTADO.usuario)} ›</div>`) : ""}
