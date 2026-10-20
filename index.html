@@ -421,8 +421,11 @@ function machoteSKUs(familia){
         .sort(function(a,b){ return (b.meta - producidoDe(b.sku)) - (a.meta - producidoDe(a.sku)); });
 }
 const inicial = n => n.trim()[0].toUpperCase();
-// 20-oct: el avance del machote (remisiones de Colecta) cuenta SOLO lo registrado con origen Colecta; lo de FULL y lo de Colchón no va aquí
-const producidoDe = sku => REGISTROS.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta').reduce((a, r) => a + r.cantidad, 0);
+// 20-oct: cada apartado muestra lo que se registró AHÍ, incluidos sus extras (que se guardan como Colchón recordando de dónde
+// salieron en la columna Referencia: "Machote", el envío FULL o la remisión). Lo de FULL y de remisiones no infla el machote.
+const esExtraDe = (r, ref) => r.origen === 'Colchón' && String(r.ref) === String(ref);
+const producidoDe = sku => REGISTROS.filter(r => r.sku === sku && ((r.origen || 'Colecta') === 'Colecta' || esExtraDe(r, 'Machote'))).reduce((a, r) => a + r.cantidad, 0);
+const producidoColectaDe = sku => REGISTROS.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta').reduce((a, r) => a + r.cantidad, 0);
 const totalHoy = () => REGISTROS.reduce((a, r) => a + r.cantidad, 0);
 
 // --- Fechas (para FULL) ---
@@ -643,7 +646,7 @@ function registrarColchon(sku){
 }
 function origenTxt(r){
     if (r.origen === 'FULL')    return '📦 FULL' + (r.ref ? ' ' + r.ref : '');
-    if (r.origen === 'Colchón') return '🧱 Colchón';
+    if (r.origen === 'Colchón') return '🧱 Colchón' + (r.ref ? ' (extra de ' + (String(r.ref) === 'Machote' ? 'la meta del día' : r.ref) + ')' : '');
     return '🧺 Colecta' + (r.ref ? ' ' + r.ref : '');
 }
 // Tarjeta del colchón del mes (operador y admin): objetivo = 30% de lo producido para pedidos en el mes.
@@ -1198,11 +1201,11 @@ function faltanPara(ctx, sku){
     if (ctx && ctx.origen === 'Colchón') return null;                       // ya es colchón
     if (ctx) {
         const meta = Number(ctx.meta) || 0; if (!meta) return null;         // sin meta conocida: no se reparte
-        const hecho = REGISTROS.filter(r => r.origen === ctx.origen && r.ref === ctx.ref && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+        const hecho = REGISTROS.filter(r => r.origen === ctx.origen && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
         return Math.max(0, meta - hecho);
     }
     const sel = machoteSKUs("").find(x => x.sku === sku); if (!sel || !sel.meta) return null;
-    return Math.max(0, sel.meta - producidoDe(sku));                        // mismo cálculo que "Meta de hoy"
+    return Math.max(0, sel.meta - producidoColectaDe(sku));                 // lo que falta de la meta se mide solo con Colecta
 }
 function avisoExtrasHTML(ctx, sku){
     const f = faltanPara(ctx, sku); if (f === null) return "";
@@ -1226,7 +1229,7 @@ async function guardar(){
         if (cant - extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: cant - extra,
             origen: ctx ? ctx.origen : "Colecta",   // lo del machote es Colecta (N-04)
             ref: ctx ? ctx.ref : "" }));
-        if (extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: extra, origen: "Colchón", ref: "" }));
+        if (extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: extra, origen: "Colchón", ref: ctx ? ctx.ref : "Machote" }));   // 20-oct: el extra recuerda de dónde salió
         await cargarResumen();               // vuelve a leer lo de hoy (ya con lo nuevo)
         const a = ctx ? (ctx.origen === 'FULL' ? 'al envío' : 'a la remisión') : 'a la meta';
         toast(extra ? (cant - extra > 0 ? `✓ ${cant - extra} ${a} · ${extra} al colchón` : `✓ ${extra} pzs al colchón (${a.replace('a la ', 'la ').replace('al ', 'el ')} ya estaba cubierto)`) : `✓ ${cant} pzs de ${nombre}`);
@@ -1318,6 +1321,7 @@ function vistaSkuDetalle(){
     }).join("");
     return header(info.nombre, sku) + `<main>
         <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
+        ${hoyPorApartadoHTML(sku)}
         <div class="card">
             ${enMachote ? `<div class="item" style="padding:0"><div class="desc">Producido hoy / meta</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${info.meta} pzs</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>` : ``}
@@ -1328,6 +1332,36 @@ function vistaSkuDetalle(){
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
+
+/* 20-oct: "Hoy por apartado" en la ficha del SKU. Cada apartado enseña TODO lo que se registró ahí (incluidos sus
+   extras, que además suman al colchón del mes) y al final el total del SKU en el día. */
+function hoyPorApartadoHTML(sku){
+    const regs = REGISTROS.filter(r => r.sku === sku); if (!regs.length) return "";
+    const n = x => Number(x) || 0, rf = r => String(r.ref || "");
+    const filas = [];
+    const fila = (txt, cant, extra, meta) => filas.push(`<div class="item" style="border:none;padding:6px 0"><div class="desc">${txt}${extra ? ` <span style="color:var(--gris)">· ${extra} extra al colchón</span>` : ``}</div><div class="cant" style="font-size:calc(14px * var(--esc))">${cant}${meta ? ` / ${meta}` : ``} pzs</div></div>`);
+    const mach = regs.filter(r => (r.origen === 'Colecta' && !rf(r)) || esExtraDe(r, 'Machote'));
+    if (mach.length) fila('🧺 Colecta (machote)', mach.reduce((a, r) => a + n(r.cantidad), 0), mach.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0), info_meta(sku));
+    [...new Set(regs.filter(r => r.origen === 'Colecta' && rf(r)).map(rf))].forEach(ref => {
+        const rs = regs.filter(r => (r.origen === 'Colecta' || r.origen === 'Colchón') && rf(r) === ref), rem = COLECTA.find(x => String(x.name) === ref);
+        const l = rem && (rem.lineas || []).find(x => x.sku === sku);
+        fila('🧺 Remisión ' + escHTML(ref), rs.reduce((a, r) => a + n(r.cantidad), 0), rs.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0), l ? l.qty : 0);
+    });
+    [...new Set(regs.filter(r => r.origen === 'FULL').map(rf))].forEach(ref => {
+        const rs = regs.filter(r => (r.origen === 'FULL' || r.origen === 'Colchón') && rf(r) === ref), f = FULL.find(x => String(x.envio) === ref);
+        const l = f && (f.lineas || []).find(x => x.sku === sku);
+        fila('📦 FULL ' + escHTML(ref), rs.reduce((a, r) => a + n(r.cantidad), 0), rs.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0), l ? l.piezas : 0);
+    });
+    const directo = regs.filter(r => r.origen === 'Colchón' && !rf(r));
+    if (directo.length) fila('🧱 Colchón (directo)', directo.reduce((a, r) => a + n(r.cantidad), 0), 0, 0);
+    const total = regs.reduce((a, r) => a + n(r.cantidad), 0), colchon = regs.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0);
+    return `<div class="card">
+        <div class="item" style="padding:0 0 6px"><div class="sku">Hoy por apartado</div><div class="cant" style="font-size:calc(18px * var(--esc))">${total} pzs</div></div>
+        ${filas.join("")}
+        <div class="desc" style="margin-top:6px">Total del SKU hoy: <b>${total}</b> pzs${colchon ? ` · de ellas <b>${colchon}</b> ya cuentan para el colchón del mes` : ``}</div>
+    </div>`;
+}
+function info_meta(sku){ const x = machoteSKUs("").find(m => m.sku === sku); return x ? x.meta : 0; }
 
 /* Colecta — vista POR REMISIÓN (Opción B: se llenan al producir; FIFO por antigüedad).
    Solo cuentan las líneas PRODUCIBLES (SKU que está en el machote de hoy). */
@@ -1343,7 +1377,7 @@ function remisionesConAvance(){
         const prod = (r.lineas||[]).filter(l => enMachote[l.sku]);
         let done = 0;
         const lineas = prod.map(l => {
-            if (restante[l.sku] === undefined) restante[l.sku] = producidoDe(l.sku);
+            if (restante[l.sku] === undefined) restante[l.sku] = producidoColectaDe(l.sku);   // solo Colecta: los extras no cubren remisiones
             const asignado = Math.min(restante[l.sku], l.qty);
             restante[l.sku] -= asignado;
             const listo = asignado >= l.qty;
@@ -1389,7 +1423,7 @@ function vistaRemisionDetalle(){
     const r = r0 ? (remisionesConAvance().find(x => x.name === r0.name) || r0) : null;   // avance al día
     if (!r) { ir('pendientes'); return ''; }
     r.lineas.forEach(l => { NOMBRES[l.sku] = l.nombre || l.sku; });
-    const hechoRem = sku => REGISTROS.filter(x => x.origen==='Colecta' && x.ref===r.name && x.sku===sku).reduce((a,x)=>a+x.cantidad,0);
+    const hechoRem = sku => REGISTROS.filter(x => (x.origen==='Colecta' || esExtraDe(x, r.name)) && String(x.ref)===String(r.name) && x.sku===sku).reduce((a,x)=>a+x.cantidad,0);
     return header(r.name, r.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
@@ -1437,7 +1471,7 @@ function vistaFullDetalle(){
     const porHacer  = lineas.filter(l => esPorHacer(l.sku));
     const terminado = lineas.filter(l => !esPorHacer(l.sku));
     const pzs = arr => arr.reduce((a,l)=>a + (l.piezas||0), 0);
-    const hechoFull = sku => REGISTROS.filter(r => r.origen==='FULL' && r.ref===f.envio && r.sku===sku).reduce((a,r)=>a+r.cantidad,0);
+    const hechoFull = sku => REGISTROS.filter(r => (r.origen==='FULL' || esExtraDe(r, f.envio)) && String(r.ref)===String(f.envio) && r.sku===sku).reduce((a,r)=>a+r.cantidad,0);
     const cardLinea = l => `
             <div class="card" style="padding:12px 16px;cursor:pointer;${l.validado?'opacity:.45':''}" onclick="verSku('${l.sku}')">
                 <div class="item" style="padding:0">
