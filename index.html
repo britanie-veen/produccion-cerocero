@@ -384,6 +384,7 @@ let ESTADO = {
     usuario: null,      // { nombre, rol } — en equipo: { nombre:"Equipo: A, B", integrantes:[...], rol:"operador" }
     modo: null,         // "individual" | "equipo" — cómo produce hoy (se elige antes del login)
     equipoSel: [],      // nombres marcados en el login de equipo (mientras se arma el equipo)
+    editandoEquipo: false, // 20-oct: true cuando se edita el equipo actual desde "Mi equipo" (quitar / cambiar / agregar)
     vista: "bienvenida",// pantalla actual (arranca en la bienvenida)
     hist: [],           // memoria de navegación: pantallas por las que pasé (para la flecha ←)
     filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
@@ -847,7 +848,7 @@ function recuperarSesion() {
 }
 function salir(aDonde) {
     lsDel(SESION_KEY);
-    ESTADO.usuario = null; ESTADO.equipoSel = []; ESTADO.modo = null; ESTADO.filtroPersona = "";
+    ESTADO.usuario = null; ESTADO.equipoSel = []; ESTADO.modo = null; ESTADO.filtroPersona = ""; ESTADO.editandoEquipo = false;
     ir(aDonde || "modo");
 }
 // Integrantes de un registro de equipo ("A, B" de la columna Integrantes; si no, del nombre "Equipo: A, B")
@@ -873,7 +874,7 @@ function entradasHoy() {
 function reentrar(nombre) {
     const e = entradasHoy().find(x => x.nombre === nombre); if (!e) return;
     if (e.integrantes && e.integrantes.length) {                        // equipo: mismos integrantes → mismo nombre → mismo historial
-        ESTADO.modo = "equipo"; ESTADO.equipoSel = [];
+        ESTADO.modo = "equipo"; ESTADO.equipoSel = []; ESTADO.editandoEquipo = false;
         ESTADO.usuario = { nombre: e.nombre, integrantes: e.integrantes, rol: "operador" };
         guardarSesion(); ir("home");
     } else entrar(nombre);
@@ -892,7 +893,7 @@ function entradasHTML() {
         <div class="seccion-titulo" style="margin-top:16px;text-align:left">¿Alguien nuevo?</div>`;
 }
 function elegirModo(m) {
-    ESTADO.modo = m; ESTADO.usuario = null; ESTADO.equipoSel = [];
+    ESTADO.modo = m; ESTADO.usuario = null; ESTADO.equipoSel = []; ESTADO.editandoEquipo = false;
     ir(m === "equipo" ? "loginEquipo" : "login");
 }
 function vistaModo() {
@@ -920,12 +921,13 @@ function vistaModo() {
 
 /* --- LOGIN DE EQUIPO: marcar a los integrantes de hoy (mínimo 2) --- */
 function vistaLoginEquipo() {
-    const sel = ESTADO.equipoSel, n = sel.length;
+    const sel = ESTADO.equipoSel, n = sel.length, ed = ESTADO.editandoEquipo;
+    const salida = ed ? 'sesion' : 'modo';   // al cancelar la edición se apaga la bandera
     return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
-        <div class="volver" onclick="ir('modo')"><span>←</span> Regresar</div>
+        <div class="volver" onclick="ESTADO.editandoEquipo=false;ir('${salida}')"><span>←</span> Regresar</div>
         <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
-        <h2>¿Quiénes van en el equipo?</h2>
-        <p class="sub">Marca a todos los integrantes de hoy (mínimo 2)</p>
+        <h2>${ed ? 'Editar integrantes' : '¿Quiénes van en el equipo?'}</h2>
+        <p class="sub">${ed ? 'Quita, cambia o agrega a quien haga falta (mínimo 2)' : 'Marca a todos los integrantes de hoy (mínimo 2)'}</p>
         <div id="chipsEquipo" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;min-height:28px">
             ${sel.map(nm => `<span class="chip full" style="cursor:pointer" onclick="toggleIntegrante('${nm}')">${nm.split(" ")[0]} ✕</span>`).join("")}
         </div>
@@ -933,10 +935,19 @@ function vistaLoginEquipo() {
                autocomplete="off" autocorrect="off" style="margin-top:10px">
         <div id="listaEquipo" style="max-height:38vh;overflow-y:auto;padding-right:2px">${equipoHTML("")}</div>
         <button class="btn" style="justify-content:center;margin-top:12px;${n < 2 ? "opacity:.35" : ""}" onclick="entrarEquipo()">
-            Entrar como equipo${n ? ` (${n})` : ""} <span class="flecha">→</span>
+            ${ed ? 'Guardar equipo' : 'Entrar como equipo'}${n ? ` (${n})` : ""} <span class="flecha">→</span>
         </button>
-        <div class="link" onclick="ir('modo')">← Mejor entro individual</div>
+        <div class="link" onclick="ESTADO.editandoEquipo=false;ir('${salida}')">${ed ? 'Cancelar' : '← Mejor entro individual'}</div>
     </div>`;
+}
+/* 20-oct: editar el equipo actual desde "Mi equipo" (quitar, cambiar o agregar integrantes). El equipo pasa a
+   llamarse con los nuevos nombres; lo ya registrado se queda a nombre del equipo anterior (cada persona lo
+   sigue viendo en su historial porque fue integrante). */
+function editarEquipo() {
+    if (!esEquipo()) return;
+    ESTADO.equipoSel = [...ESTADO.usuario.integrantes];
+    ESTADO.editandoEquipo = true;
+    ir('loginEquipo');
 }
 function equipoHTML(filtro) {
     const f = (filtro || "").trim().toLowerCase();
@@ -965,7 +976,16 @@ function dibujarListaEquipo() {
 function entrarEquipo() {
     if (ESTADO.equipoSel.length < 2) { toast("Marca al menos a 2 personas"); return; }
     const integrantes = [...ESTADO.equipoSel].sort((a, b) => a.localeCompare(b, 'es'));   // orden fijo → mismo nombre de equipo siempre
-    ESTADO.usuario = { nombre: "Equipo: " + integrantes.join(", "), integrantes: integrantes, rol: "operador" };
+    const nombre = "Equipo: " + integrantes.join(", ");
+    if (ESTADO.editandoEquipo) {                                          // 20-oct: edición del equipo actual
+        ESTADO.editandoEquipo = false;
+        if (ESTADO.usuario && ESTADO.usuario.nombre === nombre) { toast("El equipo quedó igual"); ir("sesion"); return; }
+        ESTADO.usuario = { nombre: nombre, integrantes: integrantes, rol: "operador" };
+        guardarSesion();
+        toast("✓ Equipo actualizado: " + integrantes.map(n => n.split(" ")[0]).join(", "));
+        ir("home"); return;
+    }
+    ESTADO.usuario = { nombre: nombre, integrantes: integrantes, rol: "operador" };
     guardarSesion();                                                      // 20-oct: esta tablet lo recuerda hoy
     ir("home");
 }
@@ -1512,7 +1532,8 @@ function vistaSesion(){
             <div class="lbl">piezas ${eq ? "del equipo" : "tuyas"} hoy · ${s.skus} SKUs${s.ultima ? " · último registro " + s.ultima : ""}</div></div>
         <div class="seccion-titulo" style="margin-top:8px">¿Cambia el equipo o ya terminaron?</div>
         <p class="vacio" style="padding:0 0 14px;text-align:left">Lo de hoy ya quedó guardado. ${eq ? "Tu equipo" : "Tú"} puede${eq ? "" : "s"} volver con un toque desde "Hoy ya entraron"${otrosHoy ? ` (hoy ya entraron ${otrosHoy} más)` : ""}.</p>
-        <button class="btn" onclick="salir('modo')"><span class="ico">⇄</span> Cambiar de ${eq ? "equipo" : "persona"} <span class="flecha">→</span></button>
+        ${eq ? `<button class="btn" onclick="editarEquipo()"><span class="ico">✏️</span> Editar integrantes <span class="flecha">→</span></button>` : ``}
+        <button class="btn ${eq ? 'blanco' : ''}" onclick="salir('modo')"><span class="ico">⇄</span> Cambiar de ${eq ? "equipo" : "persona"} <span class="flecha">→</span></button>
         <button class="btn blanco" onclick="salir('bienvenida')"><span class="ico">🚪</span> Salir <span class="flecha">→</span></button>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
