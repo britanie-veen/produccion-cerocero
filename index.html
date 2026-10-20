@@ -421,7 +421,8 @@ function machoteSKUs(familia){
         .sort(function(a,b){ return (b.meta - producidoDe(b.sku)) - (a.meta - producidoDe(a.sku)); });
 }
 const inicial = n => n.trim()[0].toUpperCase();
-const producidoDe = sku => REGISTROS.filter(r => r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+// 20-oct: el avance del machote (remisiones de Colecta) cuenta SOLO lo registrado con origen Colecta; lo de FULL y lo de Colchón no va aquí
+const producidoDe = sku => REGISTROS.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta').reduce((a, r) => a + r.cantidad, 0);
 const totalHoy = () => REGISTROS.reduce((a, r) => a + r.cantidad, 0);
 
 // --- Fechas (para FULL) ---
