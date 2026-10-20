@@ -1123,6 +1123,7 @@ function vistaRegistroContexto() {
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sku)}</div></div>
         </div>
         <div class="seccion-titulo">Cantidad de piezas</div>
+        ${avisoExtrasHTML(ctx, sku)}
         ${stepperHTML()}
         <button class="btn" onclick="guardar()"><span class="ico">✓</span> Registrar producción <span class="flecha">→</span></button>
         <div class="link" onclick="atras()">Cancelar</div>
@@ -1159,6 +1160,7 @@ function vistaProducir() {
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sel.sku)}</div></div>
         </div>
         <div class="seccion-titulo">Cantidad de piezas</div>
+        ${avisoExtrasHTML(null, sel.sku)}
         ${stepperHTML()}
         <button class="btn" onclick="guardar()"><span class="ico">✓</span> Registrar producción <span class="flecha">→</span></button>
         <div class="link" onclick="ir('home')">Cancelar</div>
@@ -1168,22 +1170,45 @@ function setFamilia(f){ ESTADO.reg.familia=f; ESTADO.reg.sku=null; render(); }
 function cantEscrita(v){ const n = parseInt(v, 10); if (n > 0) ESTADO.reg.cantidad = n; }
 function paso(d){ const el = document.getElementById("valor"); const n = parseInt(el.value, 10) || ESTADO.reg.cantidad;
     ESTADO.reg.cantidad = Math.max(1, n + d); el.value = ESTADO.reg.cantidad; }
+/* 20-oct: EXTRAS AL COLCHÓN. Cuántas piezas faltan para lo que se está registrando (remisión, envío FULL o
+   machote del día). Si registran MÁS de lo que falta, el sobrante se guarda aparte con origen Colchón: así el
+   colchón del mes sube solo con los extras y la base del 30 % queda solo con lo pedido. Null = no aplica. */
+function faltanPara(ctx, sku){
+    if (ctx && ctx.origen === 'Colchón') return null;                       // ya es colchón
+    if (ctx) {
+        const meta = Number(ctx.meta) || 0; if (!meta) return null;         // sin meta conocida: no se reparte
+        const hecho = REGISTROS.filter(r => r.origen === ctx.origen && r.ref === ctx.ref && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+        return Math.max(0, meta - hecho);
+    }
+    const sel = machoteSKUs("").find(x => x.sku === sku); if (!sel || !sel.meta) return null;
+    return Math.max(0, sel.meta - producidoDe(sku));                        // mismo cálculo que "Meta de hoy"
+}
+function avisoExtrasHTML(ctx, sku){
+    const f = faltanPara(ctx, sku); if (f === null) return "";
+    const a = ctx ? (ctx.origen === 'FULL' ? 'este envío' : 'esta remisión') : 'la meta de hoy';
+    return `<p class="vacio" style="padding:4px 0 10px;text-align:left">${f ? `Faltan <b>${f}</b> pzs para ${a}. Si registras más, el sobrante se guarda solo como 🧱 colchón.` : `${a[0].toUpperCase() + a.slice(1)} ya está cubierta: lo que registres se guarda como 🧱 colchón.`}</p>`;
+}
 async function guardar(){
     const ctx = ESTADO.reg.ctx, sku = ESTADO.reg.sku;
     const cant = parseInt((document.getElementById("valor") || {}).value, 10);
     if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
     const nombre = ctx ? (ctx.nombre || prod(sku).desc) : prod(sku).desc;
     const familia = ctx ? (/^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "")) : ESTADO.reg.familia;
+    // Reparto: lo que faltaba va a la remisión/envío/machote; el sobrante, al colchón (20-oct)
+    const faltan = faltanPara(ctx, sku);
+    const extra = (faltan !== null && cant > faltan) ? cant - faltan : 0;
+    const base = { action: "registrar", persona: ESTADO.usuario.nombre, sku: sku, desc: nombre, familia: familia,
+                   tipo: esEquipo() ? "Equipo" : "Individual",            // Fase 1: producción por equipo o individual
+                   integrantes: esEquipo() ? ESTADO.usuario.integrantes.join(", ") : "" };
     toast("Guardando…");
     try {
-        await enviarMotor({ action: "registrar", persona: ESTADO.usuario.nombre,
-            sku: sku, desc: nombre, familia: familia, cantidad: cant,
+        if (cant - extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: cant - extra,
             origen: ctx ? ctx.origen : "Colecta",   // lo del machote es Colecta (N-04)
-            ref: ctx ? ctx.ref : "",
-            tipo: esEquipo() ? "Equipo" : "Individual",            // Fase 1: producción por equipo o individual
-            integrantes: esEquipo() ? ESTADO.usuario.integrantes.join(", ") : "" });
+            ref: ctx ? ctx.ref : "" }));
+        if (extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: extra, origen: "Colchón", ref: "" }));
         await cargarResumen();               // vuelve a leer lo de hoy (ya con lo nuevo)
-        toast(`✓ ${cant} pzs de ${nombre}`);
+        const a = ctx ? (ctx.origen === 'FULL' ? 'al envío' : 'a la remisión') : 'a la meta';
+        toast(extra ? (cant - extra > 0 ? `✓ ${cant - extra} ${a} · ${extra} al colchón` : `✓ ${extra} pzs al colchón (${a.replace('a la ', 'la ').replace('al ', 'el ')} ya estaba cubierto)`) : `✓ ${cant} pzs de ${nombre}`);
     } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
     ESTADO.reg.cantidad = 1;
     if (ctx) atras(); else ir("historial");   // desde una remisión/envío vuelve a esa pantalla
