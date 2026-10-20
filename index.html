@@ -1307,10 +1307,37 @@ function colectaPorSKU(){
 }
 
 /* DETALLE DE UN SKU (desde Pendientes → Colecta → Por SKU): foto grande + meta, avance y stock */
-function verSku(sku){ ESTADO.skuSel = sku; ir('skuDetalle'); }
+function verSku(sku, ctx){ ESTADO.skuSel = sku; ESTADO.skuCtx = ctx || null; ir('skuDetalle'); }   // 20-oct: ctx = {tipo:'FULL'|'Colecta', ref}
+/* 20-oct (Britanie): "si entro a FULL solo quiero ver lo de FULL, no me mezcles nada". Ficha del SKU abierta desde un envío
+   FULL o una remisión: solo lo de ese envío/remisión (producido / pedido, con sus extras) y su botón de registrar. El total
+   del SKU en el día se ve en Inicio → Por SKU. */
+function vistaSkuContexto(sku, ctx){
+    const esFull = ctx.tipo === 'FULL';
+    const f = esFull ? FULL.find(x => String(x.envio) === String(ctx.ref)) : null;
+    const r = esFull ? null : COLECTA.find(x => String(x.name) === String(ctx.ref));
+    const l = esFull ? (f && (f.lineas || []).find(x => x.sku === sku)) : (r && (r.lineas || []).find(x => x.sku === sku));
+    const pedido = l ? (esFull ? l.piezas : l.qty) || 0 : 0;
+    const regs = REGISTROS.filter(x => x.sku === sku && String(x.ref) === String(ctx.ref) && (x.origen === (esFull ? 'FULL' : 'Colecta') || x.origen === 'Colchón'));
+    const hecho = regs.reduce((a, x) => a + x.cantidad, 0), extra = regs.filter(x => x.origen === 'Colchón').reduce((a, x) => a + x.cantidad, 0);
+    const pct = pedido ? Math.min(100, Math.round(hecho / pedido * 100)) : 0;
+    const nombre = (l && (l.nombre)) || NOMBRES[sku] || prod(sku).desc;
+    const titulo = esFull ? 'Envío FULL ' + escHTML(String(ctx.ref)) : 'Remisión ' + escHTML(String(ctx.ref));
+    return header(nombre, sku) + `<main>
+        <div class="foto-wrap grande"><img data-foto="${sku}" alt="${escHTML(nombre)}"></div>
+        <div class="card">
+            <div class="item" style="padding:0"><div class="desc">${titulo} · producido / pedido</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${pedido} pzs</div></div>
+            <div class="prog"><span style="width:${pct}%"></span></div>
+            ${extra ? `<div class="desc" style="margin-top:8px">De estas, <b>${extra}</b> fueron extra y ya cuentan para el 🧱 colchón del mes.</div>` : ``}
+            <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sku)}</div></div>
+        </div>
+        ${(esFull ? f : r) ? `<button class="btn" onclick="${esFull ? `registrarFull('${sku}')` : `registrarRemision('${sku}')`}"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>` : ``}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbar();
+}
 function vistaSkuDetalle(){
     const sku = ESTADO.skuSel;
     if (!sku) { ir('pendientes'); return ''; }
+    if (ESTADO.skuCtx) return vistaSkuContexto(sku, ESTADO.skuCtx);        // 20-oct: desde FULL / remisión, solo eso
     const enMachote = !!machoteSKUs("").find(x => x.sku === sku);
     const info = machoteSKUs("").find(x => x.sku === sku) || { sku: sku, nombre: NOMBRES[sku] || prod(sku).desc, familia: prod(sku).familia, meta: 0 };
     const hecho = producidoDe(sku);
@@ -1321,7 +1348,6 @@ function vistaSkuDetalle(){
     }).join("");
     return header(info.nombre, sku) + `<main>
         <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
-        ${hoyPorApartadoHTML(sku)}
         <div class="card">
             ${enMachote ? `<div class="item" style="padding:0"><div class="desc">Producido hoy / meta</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${info.meta} pzs</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>` : ``}
@@ -1332,36 +1358,6 @@ function vistaSkuDetalle(){
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
-
-/* 20-oct: "Hoy por apartado" en la ficha del SKU. Cada apartado enseña TODO lo que se registró ahí (incluidos sus
-   extras, que además suman al colchón del mes) y al final el total del SKU en el día. */
-function hoyPorApartadoHTML(sku){
-    const regs = REGISTROS.filter(r => r.sku === sku); if (!regs.length) return "";
-    const n = x => Number(x) || 0, rf = r => String(r.ref || "");
-    const filas = [];
-    const fila = (txt, cant, extra, meta) => filas.push(`<div class="item" style="border:none;padding:6px 0"><div class="desc">${txt}${extra ? ` <span style="color:var(--gris)">· ${extra} extra al colchón</span>` : ``}</div><div class="cant" style="font-size:calc(14px * var(--esc))">${cant}${meta ? ` / ${meta}` : ``} pzs</div></div>`);
-    const mach = regs.filter(r => (r.origen === 'Colecta' && !rf(r)) || esExtraDe(r, 'Machote'));
-    if (mach.length) fila('🧺 Colecta (machote)', mach.reduce((a, r) => a + n(r.cantidad), 0), mach.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0), info_meta(sku));
-    [...new Set(regs.filter(r => r.origen === 'Colecta' && rf(r)).map(rf))].forEach(ref => {
-        const rs = regs.filter(r => (r.origen === 'Colecta' || r.origen === 'Colchón') && rf(r) === ref), rem = COLECTA.find(x => String(x.name) === ref);
-        const l = rem && (rem.lineas || []).find(x => x.sku === sku);
-        fila('🧺 Remisión ' + escHTML(ref), rs.reduce((a, r) => a + n(r.cantidad), 0), rs.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0), l ? l.qty : 0);
-    });
-    [...new Set(regs.filter(r => r.origen === 'FULL').map(rf))].forEach(ref => {
-        const rs = regs.filter(r => (r.origen === 'FULL' || r.origen === 'Colchón') && rf(r) === ref), f = FULL.find(x => String(x.envio) === ref);
-        const l = f && (f.lineas || []).find(x => x.sku === sku);
-        fila('📦 FULL ' + escHTML(ref), rs.reduce((a, r) => a + n(r.cantidad), 0), rs.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0), l ? l.piezas : 0);
-    });
-    const directo = regs.filter(r => r.origen === 'Colchón' && !rf(r));
-    if (directo.length) fila('🧱 Colchón (directo)', directo.reduce((a, r) => a + n(r.cantidad), 0), 0, 0);
-    const total = regs.reduce((a, r) => a + n(r.cantidad), 0), colchon = regs.filter(r => r.origen === 'Colchón').reduce((a, r) => a + n(r.cantidad), 0);
-    return `<div class="card">
-        <div class="item" style="padding:0 0 6px"><div class="sku">Hoy por apartado</div><div class="cant" style="font-size:calc(18px * var(--esc))">${total} pzs</div></div>
-        ${filas.join("")}
-        <div class="desc" style="margin-top:6px">Total del SKU hoy: <b>${total}</b> pzs${colchon ? ` · de ellas <b>${colchon}</b> ya cuentan para el colchón del mes` : ``}</div>
-    </div>`;
-}
-function info_meta(sku){ const x = machoteSKUs("").find(m => m.sku === sku); return x ? x.meta : 0; }
 
 /* Colecta — vista POR REMISIÓN (Opción B: se llenan al producir; FIFO por antigüedad).
    Solo cuentan las líneas PRODUCIBLES (SKU que está en el machote de hoy). */
@@ -1438,7 +1434,7 @@ function vistaRemisionDetalle(){
         ${lineasFiltradas(r.lineas).map(l=>{
             const h = hechoRem(l.sku);
             const pct = Math.min(100, Math.round(h / l.qty * 100));
-            return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}')">
+            return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'Colecta',ref:'${r.name}'})">
                 <div class="item" style="padding:0">
                     <div><div class="sku">${h>=l.qty?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.qty}</div></div>
                     <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();registrarRemision('${l.sku}')">➕ Registrar</button>
@@ -1473,7 +1469,7 @@ function vistaFullDetalle(){
     const pzs = arr => arr.reduce((a,l)=>a + (l.piezas||0), 0);
     const hechoFull = sku => REGISTROS.filter(r => (r.origen==='FULL' || esExtraDe(r, f.envio)) && String(r.ref)===String(f.envio) && r.sku===sku).reduce((a,r)=>a+r.cantidad,0);
     const cardLinea = l => `
-            <div class="card" style="padding:12px 16px;cursor:pointer;${l.validado?'opacity:.45':''}" onclick="verSku('${l.sku}')">
+            <div class="card" style="padding:12px 16px;cursor:pointer;${l.validado?'opacity:.45':''}" onclick="verSku('${l.sku}',{tipo:'FULL',ref:'${f.envio}'})">
                 <div class="item" style="padding:0">
                     <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku}${l.validado?' · ✓ listo':''}</div></div>
                     <div class="cant">${l.piezas}</div>
@@ -1481,7 +1477,7 @@ function vistaFullDetalle(){
             </div>`;
     const cardPorHacer = l => {
         const h = hechoFull(l.sku);
-        return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}')">
+        return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'FULL',ref:'${f.envio}'})">
                 <div class="item" style="padding:0">
                     <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.piezas}</div></div>
                     <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();registrarFull('${l.sku}')">➕ Registrar</button>
