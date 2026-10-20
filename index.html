@@ -88,6 +88,8 @@
             border: 1px solid rgba(255,255,255,.35);
             padding: 5px 10px; border-radius: 20px;
         }
+        header .usuario.toca { cursor: pointer; }          /* 20-oct: la pastilla abre "Mi equipo" (cambiar / salir) */
+        header .usuario.toca:active { opacity: .6; }
         /* Flecha de regresar (aparece en pantallas que NO son de inicio) */
         header .btn-atras {
             background: none; border: none; color: var(--blanco);
@@ -173,6 +175,12 @@
             font-weight: 900; font-size:calc(16px * var(--esc));
         }
         .persona .rol { margin-left: auto; font-weight: 100; font-size:calc(11px * var(--esc)); color: var(--gris); text-transform: uppercase; letter-spacing: .5px; }
+        /* 20-oct: renglón de "Hoy ya entraron" (piezas y SKUs a la derecha) */
+        .persona .meta { margin-left: auto; text-align: right; font-weight: 100; font-size:calc(11px * var(--esc)); color: var(--gris); white-space: nowrap; }
+        .persona .meta b { display: block; font-weight: 900; font-size:calc(15px * var(--esc)); color: var(--negro); }
+        .persona .nom { min-width: 0; }
+        .persona .nom .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .persona .nom .d { font-weight: 100; font-size:calc(12px * var(--esc)); color: var(--gris); margin-top: 2px; }
 
         /* Barras de progreso */
         .prog { height: 8px; background: var(--linea); border-radius: 20px; overflow: hidden; margin-top: 8px; }
@@ -703,7 +711,9 @@ function header(titulo, sub) {
     return `<header>
         ${izq}
         <div class="titulo"><h1>${titulo}</h1><p>${sub || "Almacén CeroCero"}</p></div>
-        ${ESTADO.usuario ? `<div class="usuario">${nombreCorto(ESTADO.usuario)}</div>` : ""}
+        ${ESTADO.usuario ? (ESTADO.usuario.rol === "admin"
+            ? `<div class="usuario">${nombreCorto(ESTADO.usuario)}</div>`
+            : `<div class="usuario toca" onclick="ir('sesion')" title="Cambiar de equipo o salir">${nombreCorto(ESTADO.usuario)} ›</div>`) : ""}
     </header>`;
 }
 
@@ -743,6 +753,79 @@ function vistaBienvenida() {
 /* --- MODO: ¿cómo produces hoy? Individual o en equipo (antes del login) --- */
 function esEquipo() { return !!(ESTADO.usuario && ESTADO.usuario.integrantes); }
 function nombreCorto(u) { return u.integrantes ? `👥 Equipo (${u.integrantes.length})` : u.nombre.split(" ")[0]; }
+const escHTML = t => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+/* --- SESIÓN EN ESTA TABLET (20-oct): recuerda quién entró HOY (al cerrar y abrir vuelve a su pantalla)
+       y quiénes han entrado hoy, para reentrar con un toque. Al día siguiente arranca limpio solo.
+       Lo producido NO vive aquí: siempre está en el Sheet (Registros). --- */
+const SESION_KEY = "prod_sesion", ENTRADAS_KEY = "prod_entradas";
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+function horaAhora() { const d = new Date(), p = n => String(n).padStart(2, '0'); return p(d.getHours()) + ":" + p(d.getMinutes()); }
+function guardarSesion() {
+    const u = ESTADO.usuario; if (!u || u.rol === "admin") return;      // el admin siempre pasa por su PIN
+    const hoy = fechaISOhoy();
+    lsSet(SESION_KEY, { fecha: hoy, usuario: { nombre: u.nombre, integrantes: u.integrantes || null, rol: "operador" } });
+    const e = lsGet(ENTRADAS_KEY) || {};
+    const lista = (e.fecha === hoy ? (e.lista || []) : []).filter(x => x.nombre !== u.nombre);
+    lista.unshift({ nombre: u.nombre, integrantes: u.integrantes || null, hora: horaAhora() });
+    lsSet(ENTRADAS_KEY, { fecha: hoy, lista: lista.slice(0, 20) });
+}
+function recuperarSesion() {
+    const s = lsGet(SESION_KEY);
+    if (s && s.fecha === fechaISOhoy() && s.usuario && s.usuario.nombre && s.usuario.rol !== "admin") {
+        ESTADO.usuario = s.usuario; ESTADO.modo = s.usuario.integrantes ? "equipo" : "individual"; ESTADO.vista = "home";
+        return true;
+    }
+    lsDel(SESION_KEY); return false;                                     // de otro día (o nada): empieza limpio
+}
+function salir(aDonde) {
+    lsDel(SESION_KEY);
+    ESTADO.usuario = null; ESTADO.equipoSel = []; ESTADO.modo = null; ESTADO.filtroPersona = "";
+    ir(aDonde || "modo");
+}
+// Integrantes de un registro de equipo ("A, B" de la columna Integrantes; si no, del nombre "Equipo: A, B")
+function integrantesDe(r) {
+    const s = r.integrantes || String(r.persona).replace(/^Equipo:\s*/, "");
+    return String(s).split(",").map(x => x.trim()).filter(Boolean);
+}
+// Resumen del día de un nombre (persona o equipo): piezas, SKUs y hora del último registro
+function resumenDe(nombre) {
+    const regs = REGISTROS.filter(r => r.persona === nombre);
+    const ultima = regs.reduce((a, r) => (!a || String(r.hora) > a) ? String(r.hora) : a, "");
+    return { regs: regs, piezas: regs.reduce((a, r) => a + r.cantidad, 0), skus: new Set(regs.map(r => r.sku)).size, ultima: ultima };
+}
+// Quiénes han entrado HOY: lo registrado en el Sheet (desde cualquier tablet) + lo que entró en esta tablet aunque aún no registre
+function entradasHoy() {
+    const m = {};
+    REGISTROS.forEach(r => { if (!m[r.persona]) m[r.persona] = { nombre: r.persona, integrantes: esRegEquipo(r) ? integrantesDe(r) : null }; });
+    const e = lsGet(ENTRADAS_KEY);
+    if (e && e.fecha === fechaISOhoy()) (e.lista || []).forEach(x => { if (!m[x.nombre]) m[x.nombre] = { nombre: x.nombre, integrantes: x.integrantes || null }; });
+    return Object.keys(m).map(k => Object.assign(m[k], resumenDe(k)))
+        .sort((a, b) => (b.ultima || "").localeCompare(a.ultima || "") || b.piezas - a.piezas || a.nombre.localeCompare(b.nombre, 'es'));
+}
+function reentrar(nombre) {
+    const e = entradasHoy().find(x => x.nombre === nombre); if (!e) return;
+    if (e.integrantes && e.integrantes.length) {                        // equipo: mismos integrantes → mismo nombre → mismo historial
+        ESTADO.modo = "equipo"; ESTADO.equipoSel = [];
+        ESTADO.usuario = { nombre: e.nombre, integrantes: e.integrantes, rol: "operador" };
+        guardarSesion(); ir("home");
+    } else entrar(nombre);
+}
+function entradasHTML() {
+    const lista = entradasHoy().slice(0, 8); if (!lista.length) return "";
+    const corto = n => String(n).split(" ")[0];
+    return `<div class="seccion-titulo" style="margin-top:22px;text-align:left">Hoy ya entraron <small>Toca para seguir donde iban</small></div>
+        <div style="max-height:36vh;overflow-y:auto;padding-right:2px">
+        ${lista.map(e => `<div class="persona" onclick="reentrar('${escHTML(e.nombre)}')">
+            <div class="avatar">${e.integrantes ? "👥" : inicial(e.nombre)}</div>
+            <div class="nom"><div class="n">${e.integrantes ? "Equipo: " + e.integrantes.map(corto).join(", ") : escHTML(e.nombre)}</div>
+                 <div class="d">${e.ultima ? "último registro " + e.ultima : "sin registros todavía"}</div></div>
+            <div class="meta"><b>${e.piezas} pzs</b>${e.skus} SKUs</div>
+        </div>`).join("")}</div>
+        <div class="seccion-titulo" style="margin-top:16px;text-align:left">¿Alguien nuevo?</div>`;
+}
 function elegirModo(m) {
     ESTADO.modo = m; ESTADO.usuario = null; ESTADO.equipoSel = [];
     ir(m === "equipo" ? "loginEquipo" : "login");
@@ -752,7 +835,8 @@ function vistaModo() {
         <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
         <h2>¿Cómo produces hoy?</h2>
         <p class="sub">Elige una opción para entrar</p>
-        <div style="width:100%;margin-top:28px">
+        ${entradasHTML()}
+        <div style="width:100%;margin-top:${entradasHoy().length ? 4 : 28}px">
             <button class="btn" style="padding:20px 18px" onclick="elegirModo('individual')">
                 <span class="ico">🙋</span>
                 <div><div>Individual</div><div style="font-weight:100;font-size:calc(12px * var(--esc));margin-top:2px">Produzco yo solo(a)</div></div>
@@ -815,6 +899,7 @@ function entrarEquipo() {
     if (ESTADO.equipoSel.length < 2) { toast("Marca al menos a 2 personas"); return; }
     const integrantes = [...ESTADO.equipoSel].sort((a, b) => a.localeCompare(b, 'es'));   // orden fijo → mismo nombre de equipo siempre
     ESTADO.usuario = { nombre: "Equipo: " + integrantes.join(", "), integrantes: integrantes, rol: "operador" };
+    guardarSesion();                                                      // 20-oct: esta tablet lo recuerda hoy
     ir("home");
 }
 
@@ -856,10 +941,10 @@ function filtrarPersonas() {
     l.innerHTML = personasHTML(document.getElementById("buscar").value);
 }
 function entrar(nombre) {
-    const p = PERSONAS.find(x => x.nombre === nombre);
+    const p = PERSONAS.find(x => x.nombre === nombre) || { nombre: nombre, rol: "operador" };   // si ya no está en la lista, entra como operador
     ESTADO.usuario = p;
     if (p.rol === "admin") { ir("adminPin"); }
-    else { ir("home"); }
+    else { guardarSesion(); ir("home"); }                                 // 20-oct: esta tablet lo recuerda hoy
 }
 
 /* --- RESUMEN DE HOY (inicio): lo que produce todo el equipo, por persona y por SKU, con filtro por persona --- */
@@ -904,7 +989,9 @@ function resumenHoyHTML() {
 
 /* --- HOME OPERADOR: "lo mío" --- */
 function vistaHome() {
-    const miProd = REGISTROS.filter(r => r.persona === ESTADO.usuario.nombre).reduce((a, r) => a + r.cantidad, 0);
+    const mios = misRegistros();                                          // 20-oct: persona = solo + en equipo; equipo = lo del equipo
+    const miProd = mios.reduce((a, r) => a + r.cantidad, 0);
+    const miEnEq = esEquipo() ? 0 : mios.filter(esRegEquipo).reduce((a, r) => a + r.cantidad, 0);
     // "Por dónde empezar": el SKU del machote con MÁS piezas pendientes (meta − producido)
     let empieza = null, gapMax = 0;
     machoteSKUs("").forEach(s => { const gap = s.meta - producidoDe(s.sku); if (gap > gapMax) { gapMax = gap; empieza = s; } });
@@ -921,7 +1008,7 @@ function vistaHome() {
         ${colchonListaHTML(5)}` : ``}
         <div class="card negra kpi">
             <div class="num">${miProd}</div>
-            <div class="lbl">${esEquipo() ? "piezas que su EQUIPO produjo hoy" : "piezas que TÚ produjiste hoy"}</div>
+            <div class="lbl">${esEquipo() ? "piezas que su EQUIPO produjo hoy" : (miEnEq ? `piezas tuyas hoy · ${miEnEq} en equipo` : "piezas que TÚ produjiste hoy")}</div>
         </div>
         <div class="fila-kpis">
             <div class="card kpi"><div class="num">${totalHoy()}</div><div class="lbl">total del equipo hoy</div></div>
@@ -934,6 +1021,7 @@ function vistaHome() {
             <button class="btn blanco" style="margin:0" onclick="irPendientes('full')"><span class="ico">📦</span> FULL <span class="flecha">→</span></button>
             <button class="btn blanco" style="margin:0" onclick="irPendientes('colchon')"><span class="ico">🧱</span> Colchón <span class="flecha">→</span></button>
         </div>
+        <button class="btn blanco" onclick="ir('sesion')"><span class="ico">⇄</span> ${esEquipo() ? "Cambiar de equipo" : "Cambiar de persona"} / Salir <span class="flecha">→</span></button>
         ${resumenHoyHTML()}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
@@ -1261,25 +1349,69 @@ function vistaFullDetalle(){
 
 /* --- HISTORIAL por día --- */
 function filaHistorial(r) {
+    // 20-oct: si quien entró es una persona y el registro fue de un equipo donde iba, se ve "en equipo con …"
+    const yo = ESTADO.usuario ? ESTADO.usuario.nombre : "";
+    const deEquipo = esRegEquipo(r) && !esEquipo() && r.persona !== yo;
+    const otros = deEquipo ? integrantesDe(r).filter(n => normNombre(n) !== normNombre(yo)).map(n => n.split(" ")[0]).join(", ") : "";
+    const quien = deEquipo ? `en equipo con ${escHTML(otros || "…")}` : (esEquipo() && r.persona === yo ? "Tu equipo" : escHTML(r.persona));
     return `
             <div class="card" style="padding:12px 16px">
                 <div class="item" style="padding:0">
-                    <div class="avatar" style="width:34px;height:34px;font-size:calc(13px * var(--esc))">${inicial(r.persona)}</div>
+                    <div class="avatar" style="width:34px;height:34px;font-size:calc(13px * var(--esc))">${esRegEquipo(r) ? "👥" : inicial(r.persona)}</div>
                     <div><div class="sku">${r.desc || prod(r.sku).desc} · ${r.cantidad} pzs</div>
-                         <div class="desc">${r.persona} · <span class="hora">${r.hora}</span> · ${origenTxt(r)}</div></div>
+                         <div class="desc">${quien} · <span class="hora">${r.hora}</span> · ${origenTxt(r)}</div></div>
                     <div class="cant" style="font-size:calc(13px * var(--esc));color:var(--gris);cursor:pointer" onclick="deshacer('${r.id}')">Deshacer</div>
                 </div>
             </div>`;
 }
-/* Mi historial: SOLO lo que registró la persona que entró (hoy) */
+/* Registros de HOY en los que participó quien entró (20-oct):
+   - persona: los suyos + los de los equipos donde fue integrante
+   - equipo: los del equipo (mismo nombre fijo "Equipo: A, B") */
+function misRegistros() {
+    const u = ESTADO.usuario; if (!u) return [];
+    if (esEquipo()) return REGISTROS.filter(r => r.persona === u.nombre);
+    const yo = normNombre(u.nombre);
+    return REGISTROS.filter(r => r.persona === u.nombre || (esRegEquipo(r) && integrantesDe(r).some(n => normNombre(n) === yo)));
+}
+/* Mi historial: por persona (solo + en equipo) o por equipo (lo del equipo + lo que cada integrante hizo por su cuenta) */
 function vistaHistorial(){
-    const yo = ESTADO.usuario.nombre;
-    const filas = REGISTROS.filter(r => r.persona === yo).reverse();
+    const u = ESTADO.usuario, eq = esEquipo();
+    const filas = misRegistros().slice().reverse();
     const total = filas.reduce((a, r) => a + r.cantidad, 0);
-    return header("Mi historial", "Lo que tú produjiste hoy") + `<main>
-        <div class="card negra kpi"><div class="num">${total}</div><div class="lbl">piezas que TÚ produjiste hoy</div></div>
-        <div class="seccion-titulo">Mis registros de hoy</div>
-        ${filas.length ? filas.map(filaHistorial).join("") : `<p class="vacio">Aún no has registrado nada hoy.</p>`}
+    const solo = eq ? 0 : filas.filter(r => !esRegEquipo(r)).reduce((a, r) => a + r.cantidad, 0);
+    const enEq = total - solo;
+    let aparte = "";
+    if (eq) {                                                            // equipo: lo que cada integrante registró por su cuenta hoy
+        const bloques = u.integrantes.map(n => {
+            const rs = REGISTROS.filter(r => r.persona === n).slice().reverse();
+            return rs.length ? `<div class="seccion-titulo" style="font-size:calc(12px * var(--esc));margin:14px 0 8px">${escHTML(n)} por su cuenta · ${rs.reduce((a, r) => a + r.cantidad, 0)} pzs</div>${rs.map(filaHistorial).join("")}` : "";
+        }).filter(Boolean);
+        if (bloques.length) aparte = `<div class="seccion-titulo" style="margin-top:22px">Por su cuenta hoy <small>Lo que los integrantes registraron sin el equipo</small></div>${bloques.join("")}`;
+    }
+    return header("Mi historial", eq ? "Lo que produjo el equipo hoy" : "Lo que tú produjiste hoy") + `<main>
+        <div class="card negra kpi"><div class="num">${total}</div>
+            <div class="lbl">${eq ? "piezas del EQUIPO hoy" : (enEq ? `piezas en las que participaste hoy · ${solo} tú solo(a) · ${enEq} en equipo` : "piezas que TÚ produjiste hoy")}</div></div>
+        <div class="seccion-titulo">${eq ? "Registros del equipo hoy" : "Mis registros de hoy"}</div>
+        ${filas.length ? filas.map(filaHistorial).join("") : `<p class="vacio">${eq ? "El equipo aún no ha registrado nada hoy." : "Aún no has registrado nada hoy."}</p>`}
+        ${aparte}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbar();
+}
+/* Mi equipo / Mi sesión (20-oct): quién está usando la tablet, su resumen del día, y Cambiar de equipo / Salir */
+function vistaSesion(){
+    const u = ESTADO.usuario, eq = esEquipo(), s = resumenDe(u.nombre);
+    const otrosHoy = entradasHoy().filter(e => e.nombre !== u.nombre).length;
+    return header(eq ? "Mi equipo" : "Mi sesión", "Quién está usando la app") + `<main>
+        <div class="card" style="padding:16px">
+            <div class="seccion-titulo" style="margin:0 0 10px">${eq ? "Integrantes del equipo" : "Persona"}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">${(eq ? u.integrantes : [u.nombre]).map(n => `<span class="chip full">${escHTML(n)}</span>`).join("")}</div>
+        </div>
+        <div class="card negra kpi"><div class="num">${s.piezas}</div>
+            <div class="lbl">piezas ${eq ? "del equipo" : "tuyas"} hoy · ${s.skus} SKUs${s.ultima ? " · último registro " + s.ultima : ""}</div></div>
+        <div class="seccion-titulo" style="margin-top:8px">¿Cambia el equipo o ya terminaron?</div>
+        <p class="vacio" style="padding:0 0 14px;text-align:left">Lo de hoy ya quedó guardado. ${eq ? "Tu equipo" : "Tú"} puede${eq ? "" : "s"} volver con un toque desde "Hoy ya entraron"${otrosHoy ? ` (hoy ya entraron ${otrosHoy} más)` : ""}.</p>
+        <button class="btn" onclick="salir('modo')"><span class="ico">⇄</span> Cambiar de ${eq ? "equipo" : "persona"} <span class="flecha">→</span></button>
+        <button class="btn blanco" onclick="salir('bienvenida')"><span class="ico">🚪</span> Salir <span class="flecha">→</span></button>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -1478,7 +1610,7 @@ function render() {
         bienvenida: vistaBienvenida, modo: vistaModo, loginEquipo: vistaLoginEquipo,
         login: vistaLogin, home: vistaHome, producir: vistaProducir,
         pendientes: vistaPendientes, skuDetalle: vistaSkuDetalle, fullDetalle: vistaFullDetalle,
-        remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial,
+        remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial, sesion: vistaSesion,
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking, adminHistorial: vistaAdminHistorial,
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
@@ -1487,6 +1619,7 @@ function render() {
     hidratarFotos();                                              // fotos de Odoo de lo que se ve en pantalla
 }
 
+recuperarSesion();   // 20-oct: si alguien entró HOY en esta tablet, vuelve directo a su pantalla
 render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
