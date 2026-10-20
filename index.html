@@ -489,7 +489,7 @@ async function cargarResumen() {
             REGISTROS = (j.registrosHoy || []).map(x => ({
                 id: x.id, persona: x.persona, sku: x.sku, desc: x.desc,
                 familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora,
-                origen: x.origen || 'Colecta', ref: x.ref || '',
+                origen: x.origen || 'Colecta', ref: String(x.ref || ''),   // 20-oct: el Sheet convierte "79774703" a número; como texto sí empata con el envío FULL
                 tipo: x.tipo || (String(x.persona).indexOf('Equipo:') === 0 ? 'Equipo' : 'Individual'),
                 integrantes: x.integrantes || ''
             }));
