@@ -571,7 +571,21 @@ function stockTxt(sku){ return (STOCK[sku] !== undefined) ? Number(STOCK[sku]).t
 
 /* ---------- Fase 2: COLCHÓN DEL MES + GUÍA POST-META ---------- */
 // Piezas que FALTAN hoy del machote (meta − producido, solo positivos). 0 = el día ya está cubierto.
-function pendienteHoy(){ return machoteSKUs("").reduce((a, s) => a + Math.max(0, s.meta - producidoDe(s.sku)), 0); }
+function pendienteHoy(fam){ return machoteSKUs(fam || "").reduce((a, s) => a + Math.max(0, s.meta - producidoDe(s.sku)), 0); }
+/* 20-oct (pedido de Ricardo, que lleva los cortes): filtro Tapetes / Pisos dentro de Pendientes → Colecta.
+   Aplica a Por SKU, Por remisión y al detalle de cada remisión. Se recuerda en esta tablet. */
+function famFiltro(){ return ESTADO.famFiltro || ""; }
+function setFamFiltro(f){ ESTADO.famFiltro = f || ""; lsSet("prod_fam", ESTADO.famFiltro); render(); }
+function famTabsHTML(){
+    const f = famFiltro();
+    return `<div class="tabs" style="margin-bottom:10px">
+        <button class="${!f?'on':''}" onclick="setFamFiltro('')">Todo<small>${pendienteHoy("")} pzs</small></button>
+        <button class="${f==='Tapetes'?'on':''}" onclick="setFamFiltro('Tapetes')">🧘 Tapetes<small>${pendienteHoy("Tapetes")} pzs</small></button>
+        <button class="${f==='Pisos'?'on':''}" onclick="setFamFiltro('Pisos')">🧱 Pisos<small>${pendienteHoy("Pisos")} pzs</small></button>
+    </div>`;
+}
+// Líneas de una remisión que entran en el filtro (la familia sale del machote de hoy)
+function lineasFiltradas(lineas){ const f = famFiltro(); return f ? (lineas || []).filter(l => prod(l.sku).familia === f) : (lineas || []); }
 // La guía del colchón SOLO es referencia cuando ya terminaron lo de remisiones (machote) Y los envíos FULL.
 const FULL_DIAS = 7;   // 🆕 (19-oct) el colchón se sugiere cuando están cubiertas las colectas y los FULL de los próximos 7 días
 function fechaISOmas(d){ const x=new Date(); x.setDate(x.getDate()+d); const p=n=>String(n).padStart(2,'0'); return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())}`; }
@@ -1198,7 +1212,7 @@ function vistaPendientes(){
     return header("Pendientes", sub) + `<main>
         ${avisoMachote()}
         <div class="tabs grande">
-            <button class="${(!enFull && !enColchon)?'on':''}" onclick="ESTADO.pendVista='colecta';render()">🧺 Colecta<small>${pendienteHoy()} pzs por producir</small></button>
+            <button class="${(!enFull && !enColchon)?'on':''}" onclick="ESTADO.pendVista='colecta';render()">🧺 Colecta<small>${pendienteHoy(famFiltro())} pzs por producir${famFiltro() ? ' (' + famFiltro().toLowerCase() + ')' : ''}</small></button>
             <button class="${enFull?'on':''}" onclick="ESTADO.pendVista='full';render()">📦 FULL<small>${fullPend} envíos por preparar</small></button>
             <button class="${enColchon?'on':''}" onclick="ESTADO.pendVista='colchon';render()">🧱 Colchón<small>${MES ? 'faltan ' + MES.colchonPendiente + ' pzs' : '…'}</small></button>
         </div>
@@ -1206,6 +1220,7 @@ function vistaPendientes(){
         <div class="seccion-titulo">FULL · por fecha límite <small>Envíos a preparar (REGISTRO_ENVIOS)</small></div>
         ${fullListaHTML()}` : `
         <div class="seccion-titulo">Colecta <small>${porRem ? 'Remisiones — se llenan conforme produces (más antigua primero)' : 'Lo que hay que producir (machote de Sofi)'}</small></div>
+        ${famTabsHTML()}
         <div class="tabs">
             <button class="${!porRem?'on':''}" onclick="ESTADO.colectaVista='sku';render()">Por SKU</button>
             <button class="${porRem?'on':''}" onclick="ESTADO.colectaVista='remision';render()">Por remisión</button>
@@ -1235,8 +1250,10 @@ function colectaPorSKU(){
             ${["C1","C2","C3"].map(c=>`<button class="${ESTADO.corte===c?'on':''}" onclick="ESTADO.corte='${c}';render()">${c}<small>${c==='C1'?'8–9h':c==='C2'?'9–12h':'12–17h'}</small></button>`).join("")}
         </div>
         ${items.length ? `
-            ${tapetes.length ? `<div class="seccion-titulo" style="font-size:calc(12px * var(--esc));margin-bottom:8px">Tapetes</div>${bloque(tapetes)}` : ``}
-            ${pisos.length ? `<div class="seccion-titulo" style="font-size:calc(12px * var(--esc));margin:14px 0 8px">Pisos</div>${bloque(pisos)}` : ``}
+            ${tapetes.length && famFiltro() !== 'Pisos' ? `<div class="seccion-titulo" style="font-size:calc(12px * var(--esc));margin-bottom:8px">Tapetes</div>${bloque(tapetes)}` : ``}
+            ${pisos.length && famFiltro() !== 'Tapetes' ? `<div class="seccion-titulo" style="font-size:calc(12px * var(--esc));margin:14px 0 8px">Pisos</div>${bloque(pisos)}` : ``}
+            ${famFiltro() === 'Tapetes' && !tapetes.length ? `<p class="vacio">El corte ${ESTADO.corte} no tiene tapetes.</p>` : ``}
+            ${famFiltro() === 'Pisos' && !pisos.length ? `<p class="vacio">El corte ${ESTADO.corte} no tiene pisos.</p>` : ``}
         ` : `<p class="vacio">El corte ${ESTADO.corte} aún no tiene producción cargada.</p>`}`;
 }
 
@@ -1293,8 +1310,14 @@ function remisionesConAvance(){
 }
 function colectaPorRemision(){
     if (!COLECTA.length) return `<p class="vacio">No hay remisiones de Colecta pendientes ahora.</p>`;
-    const rems = remisionesConAvance();
+    let rems = remisionesConAvance();
     if (!rems.length) return `<p class="vacio">Ninguna remisión pendiente requiere producción (todo es de stock).</p>`;
+    if (famFiltro()) {                                               // solo lo de la familia elegida (Ricardo)
+        rems = rems.map(r => { const ls = lineasFiltradas(r.lineas); const d = ls.filter(l => l.listo).length;
+                               return Object.assign({}, r, { lineas: ls, done: d, total: ls.length, completa: ls.length > 0 && d === ls.length }); })
+                   .filter(r => r.total > 0);
+        if (!rems.length) return `<p class="vacio">Ninguna remisión pendiente lleva ${famFiltro().toLowerCase()}.</p>`;
+    }
     return rems.map(r => {
         const pct = Math.round(r.done / r.total * 100);
         const b = r.completa;
@@ -1302,7 +1325,7 @@ function colectaPorRemision(){
             <div class="item" style="padding:0">
                 <div><div class="sku" ${b?'style="color:#fff"':''}>${b?'✅ ':''}${r.name}</div>
                      <div class="desc" ${b?'style="color:rgba(255,255,255,.7)"':''}>${r.canal}</div></div>
-                <div class="cant" style="font-size:calc(14px * var(--esc))${b?';color:#fff':''}">${r.done}/${r.total} SKUs ›</div>
+                <div class="cant" style="font-size:calc(14px * var(--esc))${b?';color:#fff':''}">${r.done}/${r.total} SKUs${famFiltro() ? ' de ' + famFiltro().toLowerCase() : ''} ›</div>
             </div>
             <div class="prog"><span style="width:${pct}%"></span></div>
         </div>`;
@@ -1330,8 +1353,9 @@ function vistaRemisionDetalle(){
             <div class="prog" style="background:rgba(255,255,255,.25)"><span style="width:${Math.round(r.done/r.total*100)}%;background:#fff"></span></div>
             ${r.otras ? `<div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">+${r.otras} artículo(s) de stock (no se producen aquí)</div>` : ``}
         </div>
-        <div class="seccion-titulo">Lo que hay que producir para esta remisión</div>
-        ${r.lineas.map(l=>{
+        <div class="seccion-titulo">Lo que hay que producir para esta remisión${famFiltro() ? ` <small>solo ${famFiltro().toLowerCase()} · <span class="link" style="display:inline;padding:0" onclick="setFamFiltro('')">ver todo</span></small>` : ``}</div>
+        ${!lineasFiltradas(r.lineas).length ? `<p class="vacio">Esta remisión no lleva ${famFiltro().toLowerCase()}.</p>` : ``}
+        ${lineasFiltradas(r.lineas).map(l=>{
             const h = hechoRem(l.sku);
             const pct = Math.min(100, Math.round(h / l.qty * 100));
             return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}')">
@@ -1673,6 +1697,7 @@ function render() {
 }
 
 recuperarSesion();   // 20-oct: si alguien entró HOY en esta tablet, vuelve directo a su pantalla
+ESTADO.famFiltro = lsGet("prod_fam") || "";   // 20-oct: filtro Tapetes / Pisos de Colecta (Ricardo)
 render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
