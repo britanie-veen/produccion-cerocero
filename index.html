@@ -424,6 +424,8 @@ const inicial = n => n.trim()[0].toUpperCase();
 // 20-oct: cada apartado muestra lo que se registró AHÍ, incluidos sus extras (que se guardan como Colchón recordando de dónde
 // salieron en la columna Referencia: "Machote", el envío FULL o la remisión). Lo de FULL y de remisiones no infla el machote.
 const esExtraDe = (r, ref) => r.origen === 'Colchón' && String(r.ref) === String(ref);
+const extrasDe = (sku, ref) => REGISTROS.filter(r => r.sku === sku && esExtraDe(r, ref)).reduce((a, r) => a + r.cantidad, 0);
+const extrasTxt = (sku, ref) => { const e = extrasDe(sku, ref); return e ? ` · 🧱 ${e} extra al colchón` : ``; };   // 20-oct: aviso en las listas de FULL y remisión
 const producidoDe = sku => REGISTROS.filter(r => r.sku === sku && ((r.origen || 'Colecta') === 'Colecta' || esExtraDe(r, 'Machote'))).reduce((a, r) => a + r.cantidad, 0);
 const producidoColectaDe = sku => REGISTROS.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta').reduce((a, r) => a + r.cantidad, 0);
 const totalHoy = () => REGISTROS.reduce((a, r) => a + r.cantidad, 0);
@@ -1436,7 +1438,7 @@ function vistaRemisionDetalle(){
             const pct = Math.min(100, Math.round(h / l.qty * 100));
             return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'Colecta',ref:'${r.name}'})">
                 <div class="item" style="padding:0">
-                    <div><div class="sku">${h>=l.qty?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.qty}</div></div>
+                    <div><div class="sku">${h>=l.qty?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.qty}${extrasTxt(l.sku, r.name)}</div></div>
                     <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();registrarRemision('${l.sku}')">➕ Registrar</button>
                 </div>
                 <div class="prog"><span style="width:${pct}%"></span></div>
@@ -1479,7 +1481,7 @@ function vistaFullDetalle(){
         const h = hechoFull(l.sku);
         return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'FULL',ref:'${f.envio}'})">
                 <div class="item" style="padding:0">
-                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.piezas}</div></div>
+                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.piezas}${extrasTxt(l.sku, f.envio)}</div></div>
                     <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();registrarFull('${l.sku}')">➕ Registrar</button>
                 </div>
             </div>`;
