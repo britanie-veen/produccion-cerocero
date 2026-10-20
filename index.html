@@ -137,6 +137,11 @@
         .fila-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .fila-kpis .kpi { padding: 18px 8px; }
         .fila-kpis .num { font-size:calc(38px * var(--esc)); }
+        /* 🆕 (20-oct) tres accesos en una fila (Colecta · FULL · Colchón) */
+        .fila-kpis.tres { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+        .fila-kpis.tres .btn { padding: 14px 6px; gap: 6px; justify-content: center; font-size: calc(14px * var(--esc)); }
+        .fila-kpis.tres .btn .flecha { margin-left: 0; }
+        .btn.off { opacity: .35; pointer-events: none; }   /* botón apagado (todavía no toca) */
 
         /* Botones */
         .btn {
@@ -357,7 +362,7 @@ let ESTADO = {
     mesSel: "",         // mes elegido en "Cierre de mes" del admin ("" = el más reciente)
     corte: "C1",        // corte seleccionado
     colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
-    pendVista: "colecta", // 🆕 (19-oct) "colecta" o "full": qué se ve en Pendientes
+    pendVista: "colecta", // 🆕 (19-oct) "colecta", "full" o "colchon" (20-oct): qué se ve en Pendientes
     reg: { familia: "Tapetes", sku: null, cantidad: 1 }, // captura en curso
 };
 
@@ -578,7 +583,8 @@ function colchonKpiHTML(negra){
     </div>`;
 }
 // Guía post-meta: lista de SKUs del colchón con botón ➕ (ordenados por SUGERENCIA, de mayor a menor).
-function colchonListaHTML(n){
+function colchonListaHTML(n, activo){
+    if (activo === undefined) activo = true;   // 🆕 (20-oct) false = se ve la lista pero el botón va apagado
     const lista = colchonLista(n);
     if (!lista.length) return `<p class="vacio">${TOPREM ? "Aún no hay remisiones recientes para sugerir." : "Cargando remisiones de Odoo…"}</p>`;
     return lista.map((t, i) => `
@@ -587,9 +593,75 @@ function colchonListaHTML(n){
                 <div style="font-size:calc(18px * var(--esc));width:28px;text-align:center;color:var(--gris)">${i + 1}</div>
                 <div style="flex:1"><div class="sku">${t.nombre}</div>
                     <div class="desc">${t.sugerido ? `<b>Sugerido: ${t.sugerido} pzs</b> · ` : ''}${t.sku} · ${(Number(t.piezas)||0).toLocaleString('es-MX')} pzs en ${t.remisiones} remisiones · stock ${stockTxt(t.sku)}${colchonHoyDe(t.sku) ? ' · hoy +' + colchonHoyDe(t.sku) : ''}</div></div>
-                <button class="btn" style="width:auto;margin:0;padding:10px 14px" onclick="registrarColchon('${t.sku}')">➕ Registrar</button>
+                <button class="btn ${activo ? '' : 'off'}" style="width:auto;margin:0;padding:10px 14px" onclick="registrarColchon('${t.sku}')">➕ Registrar</button>
             </div>
         </div>`).join("");
+}
+/* ---------- 🆕 (20-oct) APARTADO COLCHÓN: el detalle del cálculo del mes, paso por paso ---------- */
+function fechaLarga(iso){
+    const m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+    const p=String(iso||"").split("-"); return p.length===3 ? Number(p[2])+" de "+m[Number(p[1])-1] : iso;
+}
+function colchonTabHTML(){
+    if (!MES) return `<p class="vacio">Cargando el colchón del mes…</p>`;
+    const pct = Math.round((MES.factor || 0.3) * 100);
+    const n = v => Number(v || 0).toLocaleString('es-MX');
+    const fila = (txt, val, negrita) => `<div class="item"><div class="desc" style="flex:1${negrita?';font-weight:600;color:var(--negro)':''}">${txt}</div><div class="cant" style="font-size:calc(15px * var(--esc))">${val}</div></div>`;
+    // 1) Cómo se calcula (con los números reales del mes)
+    const calculo = `<div class="card">
+        ${fila(`Base: piezas producidas para <b>pedidos</b> (Colecta + FULL) desde el ${fechaLarga(MES.inicio)}`, n(MES.basePedidos) + ' pzs')}
+        ${fila(`Objetivo: <b>${pct}%</b> de ${n(MES.basePedidos)}`, n(MES.objetivoColchon) + ' pzs', true)}
+        ${fila(`Producido para el colchón (registros con origen 🧱 Colchón)`, n(MES.colchonProducido) + ' pzs')}
+        ${fila(`Faltan: ${n(MES.objetivoColchon)} − ${n(MES.colchonProducido)}`, n(MES.colchonPendiente) + ' pzs', true)}
+        <div class="desc" style="margin-top:10px">El objetivo <b>crece durante el mes</b>: es un ${pct}% de lo que se va produciendo para pedidos, no una cifra fija. Cada pieza registrada como Colecta o FULL sube el objetivo; cada pieza registrada como Colchón lo cubre. El 1 del mes todo vuelve a cero.</div>
+    </div>`;
+    // 2) Cuándo toca producir colchón (las dos condiciones, con sus números)
+    const pendHoy = pendienteHoy();
+    const fullPend = fullProximos().filter(f => Number(f.piezasPendientes) > 0);
+    const fullPzs = fullPend.reduce((a, f) => a + Number(f.piezasPendientes), 0);
+    const ok1 = pendHoy === 0, ok2 = fullPend.length === 0, toca = todoCubierto();
+    const sinMachote = !MACHOTE.archivo || !MACHOTE.esDeHoy;
+    const condiciones = `<div class="card ${toca ? 'negra' : ''}">
+        <div class="item" style="padding:0 0 6px"><div class="sku" style="${toca?'color:#fff':''}">${toca ? '✅ Hoy ya toca producir colchón' : '⏳ Todavía no toca: primero lo de hoy'}</div></div>
+        <div class="item"><div class="desc" style="flex:1;${toca?'color:rgba(255,255,255,.75)':''}">${!MACHOTE.archivo ? '⚠️' : ok1 ? '✅' : '❌'} Machote de hoy (Colecta)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${!MACHOTE.archivo ? 'sin machote cargado' : ok1 ? 'cubierto' : 'faltan ' + n(pendHoy) + ' pzs'}</div></div>
+        <div class="item" style="border:none"><div class="desc" style="flex:1;${toca?'color:rgba(255,255,255,.75)':''}">${ok2 ? '✅' : '❌'} Envíos FULL con entrega hasta el ${fechaLarga(fechaISOmas(FULL_DIAS))} (${FULL_DIAS} días)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${ok2 ? 'cubiertos' : fullPend.length + ' envío' + (fullPend.length===1?'':'s') + ' · ' + n(fullPzs) + ' pzs'}</div></div>
+        ${sinMachote ? `<div class="desc" style="margin-top:8px;${toca?'color:rgba(255,255,255,.75)':''}">⚠️ ${MACHOTE.archivo ? 'Sofi aún no sube el machote de hoy: la primera condición se está midiendo con el último archivo disponible.' : 'No se pudo cargar el machote: la primera condición no se puede medir todavía.'}</div>` : ``}
+    </div>`;
+    // 3) Qué producir y por qué (reparto de lo que falta entre los SKUs más pedidos)
+    const desde = TOPREM && TOPREM.desde ? fechaLarga(TOPREM.desde) : null;
+    const porque = `<div class="desc" style="margin:-6px 0 10px">Lo que falta del mes (${n(MES.colchonPendiente)} pzs) se reparte entre los <b>${COLCHON_TOP} SKUs más pedidos</b> en remisiones de Odoo${desde ? ` desde el ${desde}` : ''} (últimos ${(TOPREM && TOPREM.dias) || 30} días${TOPREM && TOPREM.remisiones ? `, ${n(TOPREM.remisiones)} remisiones` : ''}), en proporción a las piezas que pidieron. Solo entran SKUs que se fabrican aquí (tapetes y pisos). ${toca ? 'Toca ➕ Registrar para producir.' : 'El botón se enciende cuando lo de hoy esté cubierto.'}</div>`;
+    // 4) Hoy para el colchón (por SKU y quién)
+    const hoyCol = REGISTROS.filter(r => r.origen === 'Colchón');
+    const porSku = {};
+    hoyCol.forEach(r => { const o = porSku[r.sku] = porSku[r.sku] || { sku: r.sku, desc: r.desc || prod(r.sku).desc, total: 0, quien: {} };
+        o.total += r.cantidad; o.quien[r.persona] = (o.quien[r.persona] || 0) + r.cantidad; });
+    const corto = nm => { const p = String(nm).replace(/^Equipo:\s*/, '👥 ').split(" "); return p.length > 1 && p[0] !== '👥' ? p[0] + " " + p[1][0] + "." : String(nm).replace(/^Equipo:\s*/, '👥 '); };
+    const hoyHTML = hoyCol.length ? Object.keys(porSku).map(k => porSku[k]).sort((a, b) => b.total - a.total).map(x => `
+        <div class="card" style="padding:12px 16px"><div class="item" style="padding:0">
+            <div><div class="sku">${x.desc}</div><div class="desc">${x.sku} · ${Object.keys(x.quien).sort((a, b) => x.quien[b] - x.quien[a]).map(nm => corto(nm) + " " + x.quien[nm]).join(" · ")}</div></div>
+            <div class="cant">${x.total} pzs</div></div></div>`).join("")
+        : `<p class="vacio">Hoy nadie ha registrado piezas para el colchón.</p>`;
+    // 5) Extras del mes (piezas de colchón por SKU, de mayor a menor)
+    const mesK = fechaISOhoy().slice(0, 7), c = CIERRES.find(x => x.mes === mesK);
+    const extras = (c && c.extras && c.extras.length) ? c.extras.map((e, i) => `
+        <div class="card" style="padding:10px 16px"><div class="item" style="padding:0">
+            <div style="width:28px;text-align:center;color:var(--gris)">${i + 1}</div>
+            <div style="flex:1"><div class="sku">${e.nombre}</div><div class="desc">${e.sku}</div></div>
+            <div class="cant">${n(e.piezas)} pzs</div>
+        </div></div>`).join("") : `<p class="vacio">Aún no hay piezas de colchón registradas en ${mesBonito(mesK)}.</p>`;
+    return `
+        ${colchonKpiHTML(true)}
+        <div class="seccion-titulo" style="margin-top:18px">Cómo se calcula <small>Con los números reales de ${mesBonito(mesK)}</small></div>
+        ${calculo}
+        <div class="seccion-titulo" style="margin-top:18px">Cuándo toca producir colchón <small>Las dos condiciones, medidas ahora</small></div>
+        ${condiciones}
+        <div class="seccion-titulo" style="margin-top:18px">Qué producir <small>Ordenado por sugerencia, de mayor a menor</small></div>
+        ${porque}
+        ${colchonListaHTML(COLCHON_TOP, toca)}
+        <div class="seccion-titulo" style="margin-top:18px">Hoy para el colchón <small>Lo registrado hoy con origen Colchón</small></div>
+        ${hoyHTML}
+        <div class="seccion-titulo" style="margin-top:18px">Extras del mes <small>Piezas de colchón por SKU en ${mesBonito(mesK)}</small></div>
+        ${extras}`;
 }
 // Foto de un SKU: se pide al motor solo cuando se va a ver y se recuerda mientras la app está abierta.
 function mimeDe(b64){ return b64.startsWith("iVBOR") ? "image/png" : b64.startsWith("UklGR") ? "image/webp" : "image/jpeg"; }
@@ -857,9 +929,10 @@ function vistaHome() {
         </div>
         ${colchonKpiHTML(false)}
         <button class="btn" onclick="ir('producir')"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
-        <div class="fila-kpis">
+        <div class="fila-kpis tres">
             <button class="btn blanco" style="margin:0" onclick="irPendientes('colecta')"><span class="ico">🧺</span> Colecta <span class="flecha">→</span></button>
             <button class="btn blanco" style="margin:0" onclick="irPendientes('full')"><span class="ico">📦</span> FULL <span class="flecha">→</span></button>
+            <button class="btn blanco" style="margin:0" onclick="irPendientes('colchon')"><span class="ico">🧱</span> Colchón <span class="flecha">→</span></button>
         </div>
         ${resumenHoyHTML()}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
@@ -978,14 +1051,17 @@ function fullListaHTML(){
 function vistaPendientes(){
     const porRem = ESTADO.colectaVista === 'remision';
     const enFull = ESTADO.pendVista === 'full';
+    const enColchon = ESTADO.pendVista === 'colchon';   // 🆕 (20-oct) tercer apartado: Colchón del mes
     const fullPend = FULL.filter(f => Number(f.piezasPendientes) > 0).length;
-    return header("Pendientes", enFull ? "FULL · por fecha límite" : "Colecta") + `<main>
+    const sub = enColchon ? "Colchón del mes" : enFull ? "FULL · por fecha límite" : "Colecta";
+    return header("Pendientes", sub) + `<main>
         ${avisoMachote()}
         <div class="tabs grande">
-            <button class="${!enFull?'on':''}" onclick="ESTADO.pendVista='colecta';render()">🧺 Colecta<small>${pendienteHoy()} pzs por producir</small></button>
+            <button class="${(!enFull && !enColchon)?'on':''}" onclick="ESTADO.pendVista='colecta';render()">🧺 Colecta<small>${pendienteHoy()} pzs por producir</small></button>
             <button class="${enFull?'on':''}" onclick="ESTADO.pendVista='full';render()">📦 FULL<small>${fullPend} envíos por preparar</small></button>
+            <button class="${enColchon?'on':''}" onclick="ESTADO.pendVista='colchon';render()">🧱 Colchón<small>${MES ? 'faltan ' + MES.colchonPendiente + ' pzs' : '…'}</small></button>
         </div>
-        ${enFull ? `
+        ${enColchon ? colchonTabHTML() : enFull ? `
         <div class="seccion-titulo">FULL · por fecha límite <small>Envíos a preparar (REGISTRO_ENVIOS)</small></div>
         ${fullListaHTML()}` : `
         <div class="seccion-titulo">Colecta <small>${porRem ? 'Remisiones — se llenan conforme produces (más antigua primero)' : 'Lo que hay que producir (machote de Sofi)'}</small></div>
@@ -994,9 +1070,6 @@ function vistaPendientes(){
             <button class="${porRem?'on':''}" onclick="ESTADO.colectaVista='remision';render()">Por remisión</button>
         </div>
         ${porRem ? colectaPorRemision() : colectaPorSKU()}`}
-        <div class="seccion-titulo" style="margin-top:24px">🧱 Colchón del mes <small>Sugerencia para cuando ya terminaron colectas y FULL de los próximos 7 días</small></div>
-        ${colchonKpiHTML(false)}
-        ${todoCubierto() ? colchonListaHTML(8) : `<p class="vacio">Primero lo de hoy (colectas y FULL de los próximos ${FULL_DIAS} días). Cuando esté cubierto, aquí verás qué producir para el colchón, ordenado por sugerencia.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
