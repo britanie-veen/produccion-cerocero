@@ -1173,7 +1173,8 @@ function stepperHTML() {
 function registrarEn(ctx, sku) { ESTADO.reg.ctx = ctx; ESTADO.reg.sku = sku; ESTADO.reg.cantidad = 1; ESTADO.ctxListo = true; ir('producir'); }
 function vistaRegistroContexto() {
     const ctx = ESTADO.reg.ctx, sku = ESTADO.reg.sku;
-    const hecho = REGISTROS.filter(r => r.origen === ctx.origen && r.ref === ctx.ref && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+    const hecho = ctx.origen === 'Colecta' ? hechoRemision(ctx.ref, sku)
+                : REGISTROS.filter(r => r.origen === ctx.origen && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
     const meta = ctx.meta || 0, pct = meta ? Math.min(100, Math.round(hecho / meta * 100)) : 0;
     return header("Registrar", ctx.etiqueta) + `<main>
         <div class="seccion-titulo">Producto (SKU) <small>${ctx.etiqueta}</small></div>
@@ -1242,7 +1243,8 @@ function faltanPara(ctx, sku){
     if (ctx && ctx.origen === 'Colchón') return null;                       // ya es colchón
     if (ctx) {
         const meta = Number(ctx.meta) || 0; if (!meta) return null;         // sin meta conocida: no se reparte
-        const hecho = REGISTROS.filter(r => r.origen === ctx.origen && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+        const hecho = ctx.origen === 'Colecta' ? hechoRemision(ctx.ref, sku)   // 21-oct: remisión = reparto por antigüedad (misma cuenta que la lista)
+                    : REGISTROS.filter(r => r.origen === ctx.origen && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
         return Math.max(0, meta - hecho);
     }
     const sel = machoteSKUs("").find(x => x.sku === sku); if (!sel || !sel.meta) return null;
@@ -1364,7 +1366,8 @@ function vistaSkuContexto(sku, ctx){
     const l = esFull ? (f && (f.lineas || []).find(x => x.sku === sku)) : (r && (r.lineas || []).find(x => x.sku === sku));
     const pedido = l ? (esFull ? l.piezas : l.qty) || 0 : 0;
     const regs = REGISTROS.filter(x => x.sku === sku && String(x.ref) === String(ctx.ref) && (x.origen === (esFull ? 'FULL' : 'Colecta') || x.origen === 'Colchón'));
-    const hecho = regs.reduce((a, x) => a + x.cantidad, 0), extra = regs.filter(x => x.origen === 'Colchón').reduce((a, x) => a + x.cantidad, 0);
+    const extra = regs.filter(x => x.origen === 'Colchón').reduce((a, x) => a + x.cantidad, 0);
+    const hecho = esFull ? regs.reduce((a, x) => a + x.cantidad, 0) : hechoRemision(ctx.ref, sku);   // 21-oct: remisión = misma cuenta que la lista
     const pct = pedido ? Math.min(100, Math.round(hecho / pedido * 100)) : 0;
     const nombre = (l && (l.nombre)) || NOMBRES[sku] || prod(sku).desc;
     const titulo = esFull ? 'Envío FULL ' + escHTML(String(ctx.ref)) : 'Remisión ' + escHTML(String(ctx.ref));
@@ -1431,6 +1434,14 @@ function remisionesConAvance(){
                  otras:(r.lineas.length - prod.length), completa: prod.length>0 && done===prod.length };
     }).filter(r => r.total > 0);                 // solo remisiones que requieren producción
 }
+// 21-oct (Britanie): dentro de la remisión, la ficha del SKU y el aviso de "faltan N" usan la MISMA cuenta que la lista
+// Por remisión: el reparto por antigüedad de lo producido en Colecta (se registre desde el machote o desde la remisión)
+// + los extras que ya tenga esa remisión. Antes adentro solo contaba lo registrado con referencia a la remisión (0/2 con 7/7 afuera).
+function hechoRemision(name, sku){
+    const r = remisionesConAvance().find(x => String(x.name) === String(name));
+    const l = r && (r.lineas || []).find(x => x.sku === sku);
+    return (l ? l.hecho : 0) + extrasDe(sku, name);
+}
 function colectaPorRemision(){
     if (!COLECTA.length) return `<p class="vacio">No hay remisiones de Colecta pendientes ahora.</p>`;
     let rems = remisionesConAvance();
@@ -1466,7 +1477,7 @@ function vistaRemisionDetalle(){
     const r = r0 ? (remisionesConAvance().find(x => x.name === r0.name) || r0) : null;   // avance al día
     if (!r) { ir('pendientes'); return ''; }
     r.lineas.forEach(l => { NOMBRES[l.sku] = l.nombre || l.sku; });
-    const hechoRem = sku => REGISTROS.filter(x => (x.origen==='Colecta' || esExtraDe(x, r.name)) && String(x.ref)===String(r.name) && x.sku===sku).reduce((a,x)=>a+x.cantidad,0);
+    const hechoRem = sku => { const l = (r.lineas || []).find(x => x.sku === sku); return (l ? l.hecho : 0) + extrasDe(sku, r.name); };   // 21-oct: misma cuenta que la lista
     return header(r.name, r.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
