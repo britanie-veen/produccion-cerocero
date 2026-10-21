@@ -336,7 +336,8 @@ const ADMIN_PIN = "1357";   // PIN del panel de administrador (lo eligió Britan
 /* ---------- 1) DATOS DE EJEMPLO (mock) ---------- */
 // OPERADORES = personal de ALMACÉN (de COLABORADORES.xlsx, OF/AL="Almacén", sin duplicados).
 // ADMIN = Karla + Britanie + Sofía. (Claudia ya NO está en la app, 19-oct.)
-const PERSONAS = [
+// 21-oct: era `const` y la lista del Sheet nunca se aplicaba (el reemplazo fallaba en silencio). Ahora es `let`.
+let PERSONAS = [
     { nombre: "Aarón Aragón",          rol: "operador" },
     { nombre: "Alexander Tovar",       rol: "operador" },
     { nombre: "Edwin Rojo",            rol: "operador" },
@@ -592,7 +593,44 @@ function famTabsHTML(){
     </div>`;
 }
 // Líneas de una remisión que entran en el filtro (la familia sale del machote de hoy)
-function lineasFiltradas(lineas){ const f = famFiltro(); return f ? (lineas || []).filter(l => prod(l.sku).familia === f) : (lineas || []); }
+// 21-oct: familia de un SKU aunque no esté en el machote de hoy (envíos FULL): por el patrón del SKU.
+function familiaDe(sku){
+    const f = prod(sku).familia; if (f) return f;
+    const s = String(sku||"").replace(/^\[([^\]]+)\].*$/, "$1").toUpperCase();
+    if (/^VIN-/.test(s)) return "Pisos";
+    if (/^MUK-(TAPFOM|TAPTEC|YOG)/.test(s)) return "Tapetes";
+    return "";
+}
+function lineasFiltradas(lineas){ const f = famFiltro(); return f ? (lineas || []).filter(l => familiaDe(l.sku) === f) : (lineas || []); }
+// 21-oct (Britanie): dentro de un envío FULL o una remisión, pestañas Todo / Tapetes / Pisos con lo que FALTA ahí,
+// resumen "618 pzs · 15 SKUs (Tapetes 602 · Pisos 16)" y orden por faltante (lo terminado se va al fondo).
+function famTabsDe(pend){
+    const f = famFiltro();
+    return `<div class="tabs" style="margin:0 0 10px">
+        <button class="${!f?'on':''}" onclick="setFamFiltro('')">Todo<small>${pend.Todo} pzs</small></button>
+        <button class="${f==='Tapetes'?'on':''}" onclick="setFamFiltro('Tapetes')">🧘 Tapetes<small>${pend.Tapetes} pzs</small></button>
+        <button class="${f==='Pisos'?'on':''}" onclick="setFamFiltro('Pisos')">🧱 Pisos<small>${pend.Pisos} pzs</small></button>
+    </div>`;
+}
+function resumenFam(lineas, qtyDe){
+    const t = { pzs:0, skus:0, Tapetes:0, Pisos:0 };
+    (lineas||[]).forEach(l => { const q = Number(qtyDe(l))||0; t.pzs += q; t.skus++; const fam = familiaDe(l.sku); if (t[fam] !== undefined) t[fam] += q; });
+    return t;
+}
+function resumenFamTxt(t){ return `${t.pzs} pzs · ${t.skus} SKUs (Tapetes ${t.Tapetes} · Pisos ${t.Pisos})`; }
+function pendPorFam(lineas, qtyDe, hechoDe){
+    const p = { Todo:0, Tapetes:0, Pisos:0 };
+    (lineas||[]).forEach(l => { const falta = Math.max(0, (Number(qtyDe(l))||0) - hechoDe(l.sku)); p.Todo += falta; const fam = familiaDe(l.sku); if (p[fam] !== undefined) p[fam] += falta; });
+    return p;
+}
+function ordenFaltante(lineas, qtyDe, hechoDe){
+    return [...(lineas||[])].sort((a,b) => ((Number(qtyDe(b))||0) - hechoDe(b.sku)) - ((Number(qtyDe(a))||0) - hechoDe(a.sku)));
+}
+// Botón de una línea: "➕ Registrar" si falta; "Listo" (sin acción) si ya se cumplió. Se registra más desde la ficha del SKU.
+function btnLinea(listo, onclick){
+    return listo ? `<span class="chip" style="margin:0;background:var(--linea);border-color:var(--linea);color:var(--gris)">Listo</span>`
+                 : `<button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();${onclick}">➕ Registrar</button>`;
+}
 // La guía del colchón SOLO es referencia cuando ya terminaron lo de remisiones (machote) Y los envíos FULL.
 const FULL_DIAS = 7;   // 🆕 (19-oct) el colchón se sugiere cuando están cubiertas las colectas y los FULL de los próximos 7 días
 function fechaISOmas(d){ const x=new Date(); x.setDate(x.getDate()+d); const p=n=>String(n).padStart(2,'0'); return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())}`; }
@@ -1430,17 +1468,20 @@ function vistaRemisionDetalle(){
                 <div class="cant" style="color:#fff">${r.done}/${r.total}</div>
             </div>
             <div class="prog" style="background:rgba(255,255,255,.25)"><span style="width:${Math.round(r.done/r.total*100)}%;background:#fff"></span></div>
-            ${r.otras ? `<div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">+${r.otras} artículo(s) de stock (no se producen aquí)</div>` : ``}
+            <div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">Se produce aquí: ${resumenFamTxt(resumenFam(r.lineas, l=>l.qty))}</div>
+            ${r.otras ? `<div class="desc" style="color:rgba(255,255,255,.7);margin-top:4px">+${r.otras} artículo(s) de stock (no se producen aquí)</div>` : ``}
         </div>
-        <div class="seccion-titulo">Lo que hay que producir para esta remisión${famFiltro() ? ` <small>solo ${famFiltro().toLowerCase()} · <span class="link" style="display:inline;padding:0" onclick="setFamFiltro('')">ver todo</span></small>` : ``}</div>
+        <div class="seccion-titulo">Lo que hay que producir para esta remisión</div>
+        ${famTabsDe(pendPorFam(r.lineas, l=>l.qty, hechoRem))}
         ${!lineasFiltradas(r.lineas).length ? `<p class="vacio">Esta remisión no lleva ${famFiltro().toLowerCase()}.</p>` : ``}
-        ${lineasFiltradas(r.lineas).map(l=>{
-            const h = hechoRem(l.sku);
-            const pct = Math.min(100, Math.round(h / l.qty * 100));
+        ${ordenFaltante(lineasFiltradas(r.lineas), l=>l.qty, hechoRem).map(l=>{
+            const h = hechoRem(l.sku), meta = Number(l.qty)||0, listo = meta > 0 && h >= meta;
+            const pct = meta ? Math.min(100, Math.round(h / meta * 100)) : 0;
             return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'Colecta',ref:'${r.name}'})">
                 <div class="item" style="padding:0">
-                    <div><div class="sku">${h>=l.qty?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.qty}${extrasTxt(l.sku, r.name)}</div></div>
-                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();registrarRemision('${l.sku}')">➕ Registrar</button>
+                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, r.name)}</div></div>
+                    <div class="cant" style="margin-left:0">${h}/${meta}</div>
+                    ${btnLinea(listo, `registrarRemision('${l.sku}')`)}
                 </div>
                 <div class="prog"><span style="width:${pct}%"></span></div>
             </div>`;
@@ -1479,14 +1520,21 @@ function vistaFullDetalle(){
                 </div>
             </div>`;
     const cardPorHacer = l => {
-        const h = hechoFull(l.sku);
+        const h = hechoFull(l.sku), meta = Number(l.piezas)||0, listo = meta > 0 && h >= meta;
+        const pct = meta ? Math.min(100, Math.round(h / meta * 100)) : 0;
         return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'FULL',ref:'${f.envio}'})">
                 <div class="item" style="padding:0">
-                    <div><div class="sku">${l.nombre || l.sku}</div><div class="desc">${l.sku} · producido ${h}/${l.piezas}${extrasTxt(l.sku, f.envio)}</div></div>
-                    <button class="btn blanco" style="width:auto;margin:0;padding:8px 14px;font-size:calc(13px * var(--esc))" onclick="event.stopPropagation();registrarFull('${l.sku}')">➕ Registrar</button>
+                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre || l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, f.envio)}</div></div>
+                    <div class="cant" style="margin-left:0">${h}/${meta}</div>
+                    ${btnLinea(listo, `registrarFull('${l.sku}')`)}
                 </div>
+                <div class="prog"><span style="width:${pct}%"></span></div>
             </div>`;
     };
+    // 21-oct: resumen de lo que se produce aquí, pestañas por familia y orden por faltante (lo terminado al fondo)
+    const resPH = resumenFam(porHacer, l=>l.piezas);
+    const pendPH = pendPorFam(porHacer, l=>l.piezas, hechoFull);
+    const porHacerVis = ordenFaltante(lineasFiltradas(porHacer), l=>l.piezas, hechoFull);
     return header("Envío " + f.envio, f.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
@@ -1494,9 +1542,11 @@ function vistaFullDetalle(){
                 <span class="chip" style="background:#fff;color:#000;border-color:#fff">${fechaBonita(f.entregaISO)}</span>
             </div>
             <div class="item" style="border:none;padding-top:10px"><div class="desc" style="color:rgba(255,255,255,.7)">Por preparar</div><div class="cant" style="color:#fff">${f.piezasPendientes} pzs · ${f.skusPendientes} SKUs</div></div>
+            <div class="item" style="border:none;padding-top:4px"><div class="desc" style="color:rgba(255,255,255,.7)">Se produce aquí</div><div class="cant" style="color:#fff;font-size:calc(14px * var(--esc))">${resumenFamTxt(resPH)}</div></div>
         </div>
-        <div class="seccion-titulo">🔨 Por hacer <small>${porHacer.length} SKUs · ${pzs(porHacer)} pzs — se producen (tapetes y pisos)</small></div>
-        ${porHacer.length ? porHacer.map(cardPorHacer).join("") : `<p class="vacio">Nada por producir en este envío.</p>`}
+        <div class="seccion-titulo">🔨 Por hacer <small>se producen (tapetes y pisos)</small></div>
+        ${porHacer.length ? famTabsDe(pendPH) : ``}
+        ${porHacerVis.length ? porHacerVis.map(cardPorHacer).join("") : `<p class="vacio">${porHacer.length && famFiltro() ? 'Este envío no lleva ' + famFiltro().toLowerCase() + '.' : 'Nada por producir en este envío.'}</p>`}
         <div class="seccion-titulo" style="margin-top:20px">🟢 Producto terminado <small>${terminado.length} SKUs · ${pzs(terminado)} pzs — ya listo, solo empacar</small></div>
         ${terminado.length ? terminado.map(cardLinea).join("") : `<p class="vacio">Sin producto terminado en este envío.</p>`}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
