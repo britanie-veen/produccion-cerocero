@@ -218,6 +218,7 @@
         }
         .chip.full { background: var(--negro); color: var(--blanco); }
         .chip.urgente { background: var(--negro); color: var(--blanco); }
+        .chip.listo { background: #e3f6e9; color: #1e7a3c; border-color: #9fdcb3; }   /* 21-oct: envío FULL con la producción completa */
 
         /* Pestañas (cortes C1/C2/C3) */
         .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -1280,13 +1281,18 @@ async function guardar(){
 
 /* --- PENDIENTES: Colecta (por corte) + FULL --- */
 function irPendientes(v){ ESTADO.pendVista = v; ir('pendientes'); }
+// 21-oct (Britanie): en la lista de FULL se marca en verde el envío cuya producción (tapetes y pisos) ya quedó completa,
+// sin moverlo ni quitarlo. Mismo cálculo que dentro del envío (registros FULL del envío + sus extras).
+function fullHecho(f, sku){ return REGISTROS.filter(r => (r.origen==='FULL' || esExtraDe(r, f.envio)) && String(r.ref)===String(f.envio) && r.sku===sku).reduce((a,r)=>a+r.cantidad,0); }
+function fullCompleto(f){ const ph = (f.lineas||[]).filter(l => esPorHacer(l.sku)); return ph.length > 0 && ph.every(l => fullHecho(f, l.sku) >= (Number(l.piezas)||0)); }
 function fullListaHTML(){
     return FULL.length ? FULL.map(f=>{
             const urge = f.entregaISO === fechaISOhoy();
-            return `<div class="card" style="cursor:pointer" onclick="verFull('${f.envio}')">
+            const listo = fullCompleto(f);
+            return `<div class="card" style="cursor:pointer${listo?';border-color:#9fdcb3':''}" onclick="verFull('${f.envio}')">
                 <div class="item">
-                    <div><div class="sku">Envío ${f.envio}</div><div class="desc">${f.canal}</div></div>
-                    <span class="chip ${urge?'urgente':'full'}">${fechaBonita(f.entregaISO)}</span>
+                    <div><div class="sku">${listo?'<span style="color:#1e7a3c">✔</span> ':''}Envío ${f.envio}</div><div class="desc">${f.canal}</div></div>
+                    <span>${listo?'<span class="chip listo">✔ Producción lista</span> ':''}<span class="chip ${urge?'urgente':'full'}">${fechaBonita(f.entregaISO)}</span></span>
                 </div>
                 <div class="item" style="border:none;padding-top:4px"><div class="desc">Por preparar</div><div class="cant" style="font-size:calc(14px * var(--esc))">${f.piezasPendientes} pzs · ${f.skus} SKUs <span style="color:var(--gris)">›</span></div></div>
             </div>`;
