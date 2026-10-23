@@ -434,7 +434,14 @@ const extrasDe = (sku, ref) => (ref === 'Machote' ? REGISTROS : REGISTROS_REF).f
 // 23-oct: lo registrado OTROS días directo a una remisión (origen Colecta + ref S####). Lo de hoy no: ya entra en el reparto por antigüedad.
 const colectaOtrosDiasDe = (sku, ref) => REGISTROS_REF.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta' && String(r.ref) === String(ref) && r.fecha !== fechaISOhoy()).reduce((a, r) => a + r.cantidad, 0);
 // 23-oct: producido para un envío FULL (registros con origen FULL + extras con su referencia), de cualquier día.
-const hechoFullDe = (envio, sku) => REGISTROS_REF.filter(r => (r.origen === 'FULL' || esExtraDe(r, envio)) && String(r.ref) === String(envio) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+const hechoFullDe = (envio, sku) => REGISTROS_REF.filter(r => (r.origen === 'FULL' || r.origen === 'Stock' || esExtraDe(r, envio)) && String(r.ref) === String(envio) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);   // 23-oct: + tomadas de stock
+// 23-oct (Britanie): "📦 Tomadas de stock". Piezas que YA existían (p. ej. hechas el sábado como extra) y se usan para cubrir una
+// remisión o un envío FULL. Se guardan con origen 'Stock' + la referencia. Cuentan para el avance de ESA remisión/envío, pero NO
+// son producción: no suman a la meta de hoy, al total del día, al ranking, a la semana ni al colchón (el motor las deja fuera
+// de registrosHoy; la app las lee de REGISTROS_REF). Cualquiera puede marcarlas.
+const deStockDe = (sku, ref) => REGISTROS_REF.filter(r => r.origen === 'Stock' && String(r.ref) === String(ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);
+const deStockTxt = (sku, ref) => { const e = deStockDe(sku, ref); return e ? ` · 📦 ${e} de stock` : ``; };
+const stockHoy = () => REGISTROS_REF.filter(r => r.origen === 'Stock' && r.fecha === fechaISOhoy());
 const extrasTxt = (sku, ref) => { const e = extrasDe(sku, ref); return e ? ` · 🧱 ${e} extra al colchón` : ``; };   // 20-oct: aviso en las listas de FULL y remisión
 const producidoDe = sku => REGISTROS.filter(r => r.sku === sku && ((r.origen || 'Colecta') === 'Colecta' || esExtraDe(r, 'Machote'))).reduce((a, r) => a + r.cantidad, 0);
 const producidoColectaDe = sku => REGISTROS.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta').reduce((a, r) => a + r.cantidad, 0);
@@ -727,6 +734,7 @@ function registrarColchon(sku){
 function origenTxt(r){
     if (r.origen === 'FULL')    return '📦 FULL' + (r.ref ? ' ' + r.ref : '');
     if (r.origen === 'Colchón') return '🧱 Colchón' + (r.ref ? ' (extra de ' + (String(r.ref) === 'Machote' ? 'la meta del día' : r.ref) + ')' : '');
+    if (r.origen === 'Stock')   return '📦 De stock' + (r.ref ? ' para ' + r.ref : '');   // 23-oct: no es producción
     return '🧺 Colecta' + (r.ref ? ' ' + r.ref : '');
 }
 // Tarjeta del colchón del mes (operador y admin): objetivo = 30% de lo producido para pedidos en el mes.
@@ -1213,9 +1221,10 @@ function registrarEn(ctx, sku) { ESTADO.reg.ctx = ctx; ESTADO.reg.sku = sku; EST
 function vistaRegistroContexto() {
     const ctx = ESTADO.reg.ctx, sku = ESTADO.reg.sku;
     const hecho = ctx.origen === 'Colecta' ? hechoRemision(ctx.ref, sku)
-                : REGISTROS_REF.filter(r => r.origen === ctx.origen && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);   // 23-oct: varios días
+                : REGISTROS_REF.filter(r => (r.origen === ctx.origen || r.origen === 'Stock') && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);   // 23-oct: varios días + stock
     const meta = ctx.meta || 0, pct = meta ? Math.min(100, Math.round(hecho / meta * 100)) : 0;
-    return header("Registrar", ctx.etiqueta) + `<main>
+    const stock = !!ctx.stock;   // 23-oct: 📦 tomar de stock (no es producción)
+    return header(stock ? "Tomar de stock" : "Registrar", ctx.etiqueta) + `<main>
         <div class="seccion-titulo">Producto (SKU) <small>${ctx.etiqueta}</small></div>
         <div class="card" style="padding:12px 16px"><div class="sku">${ctx.nombre || prod(sku).desc}</div><div class="desc">${sku}</div></div>
         <div class="foto-wrap"><img data-foto="${sku}" alt=""></div>
@@ -1224,13 +1233,14 @@ function vistaRegistroContexto() {
                 ? `<div class="item" style="padding:0"><div class="desc">Producido hoy para el colchón (este SKU)</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho} pzs</div></div>
                    <div class="item" style="border:none;padding-top:8px"><div class="desc">${ctx.sugerido ? 'Sugerido para el colchón: <b>' + ctx.sugerido + ' pzs</b> · ' : ''}Pedido en ${ctx.remisiones || 0} remisiones (últimos ${(TOPREM && TOPREM.dias) || 30} días)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${MES ? 'faltan ' + MES.colchonPendiente + ' del mes' : ''}</div></div>`
                 : `<div class="item" style="padding:0"><div class="desc">Meta de ${ctx.origen === 'FULL' ? 'este envío' : 'esta remisión'} para este SKU</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${meta} pzs</div></div>
-                   <div class="prog"><span style="width:${pct}%"></span></div>`}
+                   <div class="prog"><span style="width:${pct}%"></span></div>
+                   ${deStockDe(sku, ctx.ref) ? `<div class="desc" style="margin-top:8px">De estas, <b>${deStockDe(sku, ctx.ref)}</b> ya se tomaron de stock.</div>` : ``}`}
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sku)}</div></div>
         </div>
-        <div class="seccion-titulo">Cantidad de piezas</div>
-        ${avisoExtrasHTML(ctx, sku)}
+        <div class="seccion-titulo">${stock ? "Piezas que tomas de stock" : "Cantidad de piezas"}</div>
+        ${stock ? `<div class="aviso"><b>📦 Estas piezas ya existían</b><span>Solo cubren ${ctx.origen === 'FULL' ? 'este envío' : 'esta remisión'}. No cuentan como producción de hoy ni como colchón.${faltanPara(ctx, sku) ? ` Faltan <b>${faltanPara(ctx, sku)}</b> pzs.` : ''}</span></div>` : avisoExtrasHTML(ctx, sku)}
         ${stepperHTML()}
-        <button class="btn" onclick="guardar()"><span class="ico">✓</span> Registrar producción <span class="flecha">→</span></button>
+        <button class="btn" onclick="guardar()"><span class="ico">${stock ? '📦' : '✓'}</span> ${stock ? 'Tomar de stock' : 'Registrar producción'} <span class="flecha">→</span></button>
         <div class="link" onclick="atras()">Cancelar</div>
     </main>` + tabbar();
 }
@@ -1283,7 +1293,7 @@ function faltanPara(ctx, sku){
     if (ctx) {
         const meta = Number(ctx.meta) || 0; if (!meta) return null;         // sin meta conocida: no se reparte
         const hecho = ctx.origen === 'Colecta' ? hechoRemision(ctx.ref, sku)   // 21-oct: remisión = reparto por antigüedad (misma cuenta que la lista)
-                    : REGISTROS_REF.filter(r => r.origen === ctx.origen && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);   // 23-oct: varios días
+                    : REGISTROS_REF.filter(r => (r.origen === ctx.origen || r.origen === 'Stock') && String(r.ref) === String(ctx.ref) && r.sku === sku).reduce((a, r) => a + r.cantidad, 0);   // 23-oct: varios días + tomadas de stock
         return Math.max(0, meta - hecho);
     }
     const sel = machoteSKUs("").find(x => x.sku === sku); if (!sel || !sel.meta) return null;
@@ -1307,6 +1317,14 @@ async function guardar(){
                    tipo: esEquipo() ? "Equipo" : "Individual",            // Fase 1: producción por equipo o individual
                    integrantes: esEquipo() ? ESTADO.usuario.integrantes.join(", ") : "" };
     toast("Guardando…");
+    if (ctx && ctx.stock) {                                                    // 23-oct: 📦 tomadas de stock: no es producción, todo va a la referencia
+        try {
+            await enviarMotor(Object.assign({}, base, { cantidad: cant, origen: "Stock", ref: ctx.ref }));
+            await cargarResumen();
+            toast(`✓ ${cant} pzs de stock ${ctx.origen === 'FULL' ? 'al envío' : 'a la remisión'}`);
+        } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
+        ESTADO.reg.cantidad = 1; atras(); return;
+    }
     try {
         if (cant - extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: cant - extra,
             origen: ctx ? ctx.origen : "Colecta",   // lo del machote es Colecta (N-04)
@@ -1404,8 +1422,9 @@ function vistaSkuContexto(sku, ctx){
     const r = esFull ? null : COLECTA.find(x => String(x.name) === String(ctx.ref));
     const l = esFull ? (f && (f.lineas || []).find(x => x.sku === sku)) : (r && (r.lineas || []).find(x => x.sku === sku));
     const pedido = l ? (esFull ? l.piezas : l.qty) || 0 : 0;
-    const regs = REGISTROS_REF.filter(x => x.sku === sku && String(x.ref) === String(ctx.ref) && (x.origen === (esFull ? 'FULL' : 'Colecta') || x.origen === 'Colchón'));   // 23-oct: varios días
+    const regs = REGISTROS_REF.filter(x => x.sku === sku && String(x.ref) === String(ctx.ref) && (x.origen === (esFull ? 'FULL' : 'Colecta') || x.origen === 'Colchón' || x.origen === 'Stock'));   // 23-oct: varios días + stock
     const extra = regs.filter(x => x.origen === 'Colchón').reduce((a, x) => a + x.cantidad, 0);
+    const deStock = deStockDe(sku, ctx.ref);                                                   // 23-oct: 📦 tomadas de stock (no producidas)
     const hecho = esFull ? regs.reduce((a, x) => a + x.cantidad, 0) : hechoRemision(ctx.ref, sku);   // 21-oct: remisión = misma cuenta que la lista
     const pct = pedido ? Math.min(100, Math.round(hecho / pedido * 100)) : 0;
     const nombre = (l && (l.nombre)) || NOMBRES[sku] || prod(sku).desc;
@@ -1416,9 +1435,12 @@ function vistaSkuContexto(sku, ctx){
             <div class="item" style="padding:0"><div class="desc">${titulo} · producido / pedido</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${pedido} pzs</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
             ${extra ? `<div class="desc" style="margin-top:8px">De estas, <b>${extra}</b> fueron extra y ya cuentan para el 🧱 colchón del mes.</div>` : ``}
+            ${deStock ? `<div class="desc" style="margin-top:8px">📦 <b>${deStock}</b> se tomaron de stock (ya existían, no cuentan como producción) · <b>${Math.max(0, hecho - deStock)}</b> producidas.</div>` : ``}
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sku)}</div></div>
         </div>
-        ${(esFull ? f : r) ? `<button class="btn" onclick="${esFull ? `registrarFull('${sku}')` : `registrarRemision('${sku}')`}"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>` : ``}
+        ${(esFull ? f : r) ? `<button class="btn" onclick="${esFull ? `registrarFull('${sku}')` : `registrarRemision('${sku}')`}"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
+        <button class="btn blanco" onclick="${esFull ? `registrarFull('${sku}', true)` : `registrarRemision('${sku}', true)`}"><span class="ico">📦</span> Tomar de stock <span class="flecha">→</span></button>
+        <p class="vacio" style="padding:0 0 10px;text-align:left">Tomar de stock = piezas que ya existían y cubren ${esFull ? 'este envío' : 'esta remisión'}; no suman a la producción de hoy.</p>` : ``}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbar();
 }
@@ -1463,7 +1485,7 @@ function remisionesConAvance(){
         let done = 0;
         const lineas = prod.map(l => {
             if (restante[l.sku] === undefined) restante[l.sku] = producidoColectaDe(l.sku);   // solo Colecta: los extras no cubren remisiones
-            const previo = colectaOtrosDiasDe(l.sku, r.name);              // 23-oct: lo registrado otros días directo a esta remisión
+            const previo = colectaOtrosDiasDe(l.sku, r.name) + deStockDe(l.sku, r.name);   // 23-oct: otros días directo a esta remisión + tomadas de stock
             const asignado = Math.min(restante[l.sku], Math.max(0, l.qty - previo));
             restante[l.sku] -= asignado;
             const hecho = previo + asignado;
@@ -1508,10 +1530,10 @@ function colectaPorRemision(){
 }
 function verRemision(name){ ESTADO.remSel = remisionesConAvance().find(r => r.name === name) || null; ir('remisionDetalle'); }
 // Registrar producción para una remisión de Colecta (queda en el Sheet: origen=Colecta + ref=S####). N-05.
-function registrarRemision(sku){
+function registrarRemision(sku, stock){   // 23-oct: stock = true → 📦 tomar de stock
     const r = ESTADO.remSel; if (!r) return;
     const l = (r.lineas || []).find(x => x.sku === sku) || { sku: sku };
-    registrarEn({ origen: "Colecta", ref: r.name, etiqueta: "Remisión " + r.name, meta: l.qty || 0, nombre: l.nombre || sku }, sku);
+    registrarEn({ origen: "Colecta", ref: r.name, etiqueta: "Remisión " + r.name, meta: l.qty || 0, nombre: l.nombre || sku, stock: !!stock }, sku);
 }
 function vistaRemisionDetalle(){
     const r0 = ESTADO.remSel;
@@ -1537,7 +1559,7 @@ function vistaRemisionDetalle(){
             const pct = meta ? Math.min(100, Math.round(h / meta * 100)) : 0;
             return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'Colecta',ref:'${r.name}'})">
                 <div class="item" style="padding:0">
-                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, r.name)}</div></div>
+                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, r.name)}${deStockTxt(l.sku, r.name)}</div></div>
                     <div class="cant" style="margin-left:0">${h}/${meta}</div>
                     ${btnLinea(listo, `registrarRemision('${l.sku}')`)}
                 </div>
@@ -1556,10 +1578,10 @@ function esPorHacer(sku){
 }
 function verFull(envio){ ESTADO.fullSel = FULL.find(f => f.envio === envio) || null; ir('fullDetalle'); }
 // Registrar producción para un envío FULL (queda marcado origen=FULL + referencia del envío). N-04/N-05.
-function registrarFull(sku){
+function registrarFull(sku, stock){   // 23-oct: stock = true → 📦 tomar de stock
     const f = ESTADO.fullSel; if (!f) return;
     const l = (f.lineas || []).find(x => x.sku === sku) || { sku: sku };
-    registrarEn({ origen: "FULL", ref: f.envio, etiqueta: "Envío FULL " + f.envio, meta: l.piezas || 0, nombre: l.nombre || sku }, sku);
+    registrarEn({ origen: "FULL", ref: f.envio, etiqueta: "Envío FULL " + f.envio, meta: l.piezas || 0, nombre: l.nombre || sku, stock: !!stock }, sku);
 }
 function vistaFullDetalle(){
     const f = ESTADO.fullSel;
@@ -1582,7 +1604,7 @@ function vistaFullDetalle(){
         const pct = meta ? Math.min(100, Math.round(h / meta * 100)) : 0;
         return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'FULL',ref:'${f.envio}'})">
                 <div class="item" style="padding:0">
-                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre || l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, f.envio)}</div></div>
+                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre || l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, f.envio)}${deStockTxt(l.sku, f.envio)}</div></div>
                     <div class="cant" style="margin-left:0">${h}/${meta}</div>
                     ${btnLinea(listo, `registrarFull('${l.sku}')`)}
                 </div>
@@ -1628,6 +1650,12 @@ function filaHistorial(r) {
                 </div>
             </div>`;
 }
+// 23-oct: bloque "Tomadas de stock hoy" para el historial (persona y admin). No suman al total: no son producción.
+function stockHistorialHTML(rs){
+    if (!rs.length) return "";
+    const filas = rs.slice().reverse();
+    return `<div class="seccion-titulo" style="margin-top:22px">📦 Tomadas de stock hoy <small>Piezas que ya existían · ${filas.reduce((a, r) => a + r.cantidad, 0)} pzs · no cuentan como producción</small></div>${filas.map(filaHistorial).join("")}`;
+}
 /* Registros de HOY en los que participó quien entró (20-oct):
    - persona: los suyos + los de los equipos donde fue integrante
    - equipo: los del equipo (mismo nombre fijo "Equipo: A, B") */
@@ -1652,6 +1680,7 @@ function vistaHistorial(){
         }).filter(Boolean);
         if (bloques.length) aparte = `<div class="seccion-titulo" style="margin-top:22px">Por su cuenta hoy <small>Lo que los integrantes registraron sin el equipo</small></div>${bloques.join("")}`;
     }
+    aparte += stockHistorialHTML(stockHoy().filter(r => r.persona === u.nombre));   // 23-oct: 📦 tomadas de stock, aparte (no son producción)
     return header("Mi historial", eq ? "Lo que produjo el equipo hoy" : "Lo que tú produjiste hoy") + `<main>
         <div class="card negra kpi"><div class="num">${total}</div>
             <div class="lbl">${eq ? "piezas del EQUIPO hoy" : (enEq ? `piezas en las que participaste hoy · ${solo} tú solo(a) · ${enEq} en equipo` : "piezas que TÚ produjiste hoy")}</div></div>
@@ -1702,6 +1731,7 @@ function vistaAdminHistorial(){
         <div class="card negra kpi" style="margin-top:12px"><div class="num">${total}</div><div class="lbl">${f ? "piezas de " + esc(f) + " hoy" : "piezas producidas hoy (equipo)"} · ${filas.length} registros</div></div>
         <div class="seccion-titulo">Registros de hoy</div>
         ${filas.length ? filas.map(filaHistorial).join("") : `<p class="vacio">No hay registros${f ? " de esta persona" : ""} hoy.</p>`}
+        ${stockHistorialHTML(stockHoy().filter(r => !f || r.persona === f))}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
