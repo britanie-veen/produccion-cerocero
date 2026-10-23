@@ -536,16 +536,43 @@ function avisoFlotante(texto) {
     const d = document.createElement("div"); d.className = "aviso-flotante"; d.textContent = texto;
     document.body.appendChild(d); setTimeout(() => d.remove(), 1800);
 }
-async function refrescar() {
+async function refrescar(auto) {
     if (ESTADO.refrescando) return;
     ESTADO.refrescando = true;
     const b = document.querySelector("header .refrescar"); if (b) b.classList.add("girando");
-    const res = await Promise.all([cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon()]);
+    const res = await Promise.all([cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon(), cargarFirma()]);
     ESTADO.refrescando = false;
     const m = document.querySelector("main"), sc = m ? m.scrollTop : 0;
     render();
     const m2 = document.querySelector("main"); if (m2) m2.scrollTop = sc;   // conserva el scroll
+    if (auto) { if (res[0]) avisoFlotante("✓ Hay cambios · actualizado " + horaAhora()); return; }   // 23-oct: refresco solo, sin molestar si no hubo internet
     avisoFlotante(res[0] ? "✓ Actualizado " + horaAhora() : "Sin conexión: se muestra lo último que se cargó");
+}
+
+/* 23-oct (Britanie): "que se actualice sola cada que se suba una remisión, sin usar la flechita".
+   La app NO puede recibir avisos (nadie puede empujarle nada a una tablet), así que PREGUNTA barato: cada minuto pide al motor
+   la FIRMA (huella de los archivos de Sofi, de REGISTRO_ENVIOS y del Sheet de Registros, más un sello de 10 min para Odoo).
+   Si la firma cambió, baja todo y redibuja donde estés (conservando el scroll); si no, no hace nada. También revisa al volver
+   a la app (tablet que estuvo apagada o en otra app). Nunca refresca mientras alguien está en la pantalla de registrar. */
+let FIRMA = null, FIRMA_T = 0;
+async function cargarFirma() {
+    try {
+        const r = await fetch(MOTOR_URL + "?action=firma");
+        const j = await r.json();
+        if (j && j.ok && j.firma) { FIRMA = j.firma; FIRMA_T = Date.now(); }
+    } catch (e) { /* sin internet o motor viejo: no pasa nada */ }
+}
+async function vigilarCambios() {
+    if (!ESTADO.usuario || document.hidden || ESTADO.refrescando) return;
+    if (ESTADO.vista === "producir") return;                  // no mover nada mientras registran
+    let f = null;
+    try { const r = await fetch(MOTOR_URL + "?action=firma"); const j = await r.json(); if (j && j.ok) f = j.firma; } catch (e) { return; }
+    if (!f) return;
+    FIRMA_T = Date.now();
+    if (FIRMA === null) { FIRMA = f; return; }                // primera vez: solo se anota
+    if (f === FIRMA) return;                                  // nada cambió
+    FIRMA = f;
+    await refrescar(true);
 }
 // Fase 2: leer los SKUs más repetidos en remisiones (guía post-meta / colchón).
 async function cargarColchon() {
@@ -1863,9 +1890,13 @@ render(); // arranca la app (pantalla de bienvenida, al instante)
 
 /* Carga los datos REALES del motor (personas + lo de hoy) y vuelve a dibujar */
 (async () => {
-    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon()]);
+    await Promise.all([cargarPersonas(), cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon(), cargarFirma()]);
     render();
 })();
+
+/* 23-oct: vigilante de cambios — cada minuto, y al volver a la app si lleva más de 2 min sin revisar */
+setInterval(vigilarCambios, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - FIRMA_T > 120000) vigilarCambios(); });
 
 /* Auto-refresco del panel de admin (cada 30 s) — visibilidad en vivo, sin recargar. */
 setInterval(async () => {
