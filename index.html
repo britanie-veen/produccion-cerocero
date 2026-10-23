@@ -374,7 +374,7 @@ let MACHOTE = { fecha: "", archivo: "", esDeHoy: true, cortes: { C1: [], C2: [],
 // 23-oct: los cortes ya no son fijos. Lista ordenada de los que trae el machote (C1, C2, C3… y C4 si Sofi lo agrega).
 const HORARIO_FIJO = { C1: "8–9h", C2: "9–12h", C3: "12–17h" };
 function cortesLista(){ const ks = Object.keys((MACHOTE && MACHOTE.cortes) || {}); ["C1","C2","C3"].forEach(c => { if (ks.indexOf(c) < 0) ks.push(c); }); return ks.sort((x, y) => Number(x.slice(1)) - Number(y.slice(1))); }
-function horarioDe(c){ const h = (MACHOTE.horarios || {})[c]; return h ? h.replace(/:00/g, "").replace(/\s*-\s*/, "–") + "h" : (HORARIO_FIJO[c] || ""); }
+function horarioDe(c){ const h = (MACHOTE.horarios || {})[c], m = h && h.match(/(\d{1,2})(?::\d{2})?\s*-\s*(\d{1,2})/); return m ? Number(m[1]) + "–" + Number(m[2]) + "h" : (HORARIO_FIJO[c] || ""); }
 
 // FULL pendientes por fecha límite — del motor (REGISTRO_ENVIOS.xlsx).
 //    cada uno: { envio, canal, entrega, entregaISO, piezas, piezasPendientes, skus }
