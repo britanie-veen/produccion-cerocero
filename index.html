@@ -307,6 +307,19 @@
 
         .vacio { text-align: center; color: var(--gris); font-weight: 100; padding: 40px 20px; font-size:calc(14px * var(--esc)); }
         .hora { font-weight: 100; font-size:calc(11px * var(--esc)); color: var(--gris); }
+        /* 23-oct: vista de administrador por RANGO de fechas (gráficas y filtros) */
+        .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+        .chips button { border:1.5px solid var(--negro); background:var(--blanco); color:var(--negro); border-radius:20px; padding:8px 14px; font-weight:600; font-size:calc(13px * var(--esc)); font-family:inherit; }
+        .chips button.on { background:var(--negro); color:var(--blanco); }
+        .fechas { display:flex; align-items:center; gap:8px; margin-bottom:14px; }
+        .fechas input[type=date] { flex:1; min-width:0; padding:10px 12px; border:1px solid var(--linea); border-radius:12px; font-family:inherit; font-size:calc(14px * var(--esc)); background:var(--blanco); color:var(--negro); }
+        .fechas .btn { width:auto; margin:0; padding:10px 16px; }
+        .grafica { width:100%; height:auto; display:block; }
+        .leyenda { display:flex; flex-wrap:wrap; gap:14px; font-size:calc(12px * var(--esc)); color:var(--gris); margin-top:6px; }
+        .leyenda i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+        .tabla-dias .item { padding:8px 0; gap:8px; }
+        .tabla-dias .item .desc { min-width:0; }
+        .toca-card { cursor:pointer; }
     </style>
 </head>
 
@@ -383,6 +396,7 @@ let REGISTROS_REF = [];
 let SEMANA = null;   // acumulado de la semana (lunes a hoy): { inicio, total, porDia[], ranking[] }
 let MES = null;      // Fase 2: colchón del mes { basePedidos, objetivoColchon, colchonProducido, colchonPendiente, factor }
 let TOPREM = null;
+let RANGO28 = null, RANGO28_T = 0, RANGO28_CARGANDO = false;   // 23-oct: últimas 4 semanas (Panel admin: gráfica y completados de hoy)
 let CIERRES = [];    // Fase 2: cierre por mes [{mes, basePedidos, objetivoColchon, colchonProducido, alcanzado, pct, extras[]}]   // Fase 2: SKUs más repetidos en remisiones de Odoo (últimos 30 días) { desde, dias, top:[{sku,nombre,remisiones,piezas}] }
 
 /* ---------- 2) ESTADO ---------- */
@@ -396,6 +410,8 @@ let ESTADO = {
     filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
     filtroHist: "",     // filtro del historial del administrador ("" = todas las personas)
     mesSel: "",         // mes elegido en "Cierre de mes" del admin ("" = el más reciente)
+    rango: { preset: "semana", desde: "", hasta: "", datos: null, cargando: false, error: "" },   // 23-oct: producción por rango (admin)
+    personaDet: null,   // 23-oct: { persona, modo: "hoy" | "rango" } → detalle de qué hizo una persona o equipo
     corte: "C1",        // corte seleccionado
     colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
     pendVista: "colecta", // 🆕 (19-oct) "colecta", "full" o "colchon" (20-oct): qué se ve en Pendientes
@@ -532,7 +548,7 @@ async function cargarResumen() {
    y redibuja la pantalla donde estés, sin salir de la app. Antes solo se cargaba al abrir: en la tablet no
    aparecía el Corte 3 hasta cerrar y volver a entrar. */
 const VISTAS_REFRESCAR = ["home", "producir", "pendientes", "skuDetalle", "fullDetalle", "remisionDetalle", "historial", "sesion",
-                          "adminPanel", "adminPersona", "adminRanking", "adminHistorial"];
+                          "adminPanel", "adminPersona", "adminRanking", "adminHistorial", "adminRango", "adminPersonaDet"];
 function botonRefrescar() {
     if (!ESTADO.usuario || !VISTAS_REFRESCAR.includes(ESTADO.vista)) return "";
     if (ESTADO.vista === "producir" && ESTADO.reg.ctx) return "";            // en el formulario de cantidad no se refresca
@@ -548,6 +564,12 @@ async function refrescar(auto) {
     ESTADO.refrescando = true;
     const b = document.querySelector("header .refrescar"); if (b) b.classList.add("girando");
     const res = await Promise.all([cargarResumen(), cargarMachote(), cargarFull(), cargarColecta(), cargarStock(), cargarColchon(), cargarFirma()]);
+    // 23-oct: en el admin también se renuevan las 4 semanas (Panel) y el rango abierto
+    if (ESTADO.usuario && ESTADO.usuario.rol === 'admin') {
+        const extra = [cargarRango28(true)];
+        if ((ESTADO.vista === 'adminRango' || ESTADO.vista === 'adminPersonaDet') && ESTADO.rango.datos) extra.push(cargarRango(ESTADO.rango.desde, ESTADO.rango.hasta, true));
+        await Promise.all(extra);
+    }
     ESTADO.refrescando = false;
     const m = document.querySelector("main"), sc = m ? m.scrollTop : 0;
     render();
@@ -767,7 +789,7 @@ function fechaLarga(iso){
     const m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
     const p=String(iso||"").split("-"); return p.length===3 ? Number(p[2])+" de "+m[Number(p[1])-1] : iso;
 }
-function colchonTabHTML(){
+function colchonTabHTML(soloLectura){   // 23-oct: soloLectura = Panel del admin (sin botón de registrar)
     if (!MES) return `<p class="vacio">Cargando el colchón del mes…</p>`;
     const pct = Math.round((MES.factor || 0.3) * 100);
     const n = v => Number(v || 0).toLocaleString('es-MX');
@@ -794,7 +816,7 @@ function colchonTabHTML(){
     </div>`;
     // 3) Qué producir y por qué (reparto de lo que falta entre los SKUs más pedidos)
     const desde = TOPREM && TOPREM.desde ? fechaLarga(TOPREM.desde) : null;
-    const porque = `<div class="desc" style="margin:-6px 0 10px">Lo que falta del mes (${n(MES.colchonPendiente)} pzs) se reparte entre los <b>${COLCHON_TOP} SKUs más pedidos</b> en remisiones de Odoo${desde ? ` desde el ${desde}` : ''} (últimos ${(TOPREM && TOPREM.dias) || 30} días${TOPREM && TOPREM.remisiones ? `, ${n(TOPREM.remisiones)} remisiones` : ''}), en proporción a las piezas que pidieron. Solo entran SKUs que se fabrican aquí (tapetes y pisos). ${toca ? 'Toca ➕ Registrar para producir.' : 'El botón se enciende cuando lo de hoy esté cubierto.'}</div>`;
+    const porque = `<div class="desc" style="margin:-6px 0 10px">Lo que falta del mes (${n(MES.colchonPendiente)} pzs) se reparte entre los <b>${COLCHON_TOP} SKUs más pedidos</b> en remisiones de Odoo${desde ? ` desde el ${desde}` : ''} (últimos ${(TOPREM && TOPREM.dias) || 30} días${TOPREM && TOPREM.remisiones ? `, ${n(TOPREM.remisiones)} remisiones` : ''}), en proporción a las piezas que pidieron. Solo entran SKUs que se fabrican aquí (tapetes y pisos). ${soloLectura ? 'Los operadores lo registran desde Pendientes → 🧱 Colchón.' : toca ? 'Toca ➕ Registrar para producir.' : 'El botón se enciende cuando lo de hoy esté cubierto.'}</div>`;
     // 4) Hoy para el colchón (por SKU y quién)
     const hoyCol = REGISTROS.filter(r => r.origen === 'Colchón');
     const porSku = {};
@@ -822,7 +844,7 @@ function colchonTabHTML(){
         ${condiciones}
         <div class="seccion-titulo" style="margin-top:18px">Qué producir <small>Ordenado por sugerencia, de mayor a menor</small></div>
         ${porque}
-        ${colchonListaHTML(COLCHON_TOP, toca)}
+        ${colchonListaHTML(COLCHON_TOP, toca && !soloLectura)}
         <div class="seccion-titulo" style="margin-top:18px">Hoy para el colchón <small>Lo registrado hoy con origen Colchón</small></div>
         ${hoyHTML}
         <div class="seccion-titulo" style="margin-top:18px">Extras del mes <small>Piezas de colchón por SKU en ${mesBonito(mesK)}</small></div>
@@ -1770,12 +1792,14 @@ function tabbarAdmin(){
         { v: "adminPersona",ico: "👥", txt: "Por persona" },
         { v: "adminRanking",ico: "🏆", txt: "Ranking" },
         { v: "adminHistorial",ico: "🕑", txt: "Historial" },
+        { v: "adminRango",  ico: "📅", txt: "Rango" },
     ];
     return `<nav class="tabbar">${tabs.map(t=>`
         <button onclick="ir('${t.v}')" class="${ESTADO.vista===t.v?'on':''}"><span class="ico">${t.ico}</span>${t.txt}</button>`).join("")}</nav>`;
 }
 
 function vistaAdminPanel(){
+    cargarRango28();                                   // 23-oct: 4 semanas + completados de hoy (se pide una vez cada 5 min)
     const skus = machoteSKUs("");
     const totalMeta = skus.reduce((a,m)=>a+m.meta,0);
     const totalHecho = skus.reduce((a,m)=>a+Math.min(producidoDe(m.sku),m.meta),0);
@@ -1799,13 +1823,19 @@ function vistaAdminPanel(){
             <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${fullHoy} pzs</div></div>
             <div class="item" style="border:none"><div class="desc">🧱 Colchón</div><div class="cant">${colchonHoy} pzs</div></div>
         </div>
-        <div class="seccion-titulo" style="margin-top:20px">Cierre de mes <small>¿Alcanzaron el 30% de colchón? y cuáles fueron los extras</small></div>
+        ${completadosHoyHTML()}
+        <div class="seccion-titulo" style="margin-top:20px">Últimas 4 semanas <small>¿la producción va subiendo o bajando?</small></div>
+        ${semanasHTML()}
+        <div class="seccion-titulo" style="margin-top:20px">🧱 Colchón del mes <small>Objetivo, lo que llevan, quién lo hizo hoy y los extras</small></div>
+        ${colchonTabHTML(true)}
+        <div class="seccion-titulo" style="margin-top:20px">Cierres por mes <small>¿Alcanzaron el 30% de colchón? y cuáles fueron los extras</small></div>
         ${cierreMesHTML()}
         ${SEMANA ? `
         <div class="seccion-titulo" style="margin-top:20px">Producción de la semana <small>lunes a hoy</small></div>
         <div class="card negra kpi"><div class="num">${SEMANA.total}</div><div class="lbl">piezas producidas esta semana (equipo)</div></div>
         <div class="card">
-            <div class="sku" style="margin-bottom:10px">Por día</div>
+            <div class="sku" style="margin-bottom:6px">Por día</div>
+            ${graficaLinea(SEMANA.porDia.map(d => ({ label: d.dia, v: d.piezas })), { valores: true })}
             ${SEMANA.porDia.map(d=>`
                 <div class="item" style="padding:6px 0">
                     <div class="desc" style="width:42px">${d.dia}</div>
@@ -1846,6 +1876,253 @@ function vistaAdminPanel(){
     </main>` + tabbarAdmin();
 }
 
+
+/* =================================================================
+   23-oct (Britanie, DEC-076): ADMIN · PRODUCCIÓN POR RANGO DE FECHAS, GRÁFICAS Y DETALLE POR PERSONA
+   - Pestaña "📅 Rango": botones rápidos (hoy, semana, semana pasada, mes, mes pasado) o dos fechas. Pide al motor
+     `produccion&desde&hasta` (solo lectura) y muestra: total, comparación con el periodo anterior, tendencia (gráfica
+     de línea con su recta), Tapetes/Pisos por día, FULL y remisiones completados por día, por origen (extras bajo
+     Colchón), top de SKUs y por persona.
+   - Detalle por persona (hoy o rango): qué hizo (SKUs con cantidades) y sus registros.
+   - Panel: últimas 4 semanas con tendencia y "Completados hoy" (salen de la misma acción, 28 días).
+   ================================================================= */
+function fechaISOsumar(iso, n){ const p = String(iso).split("-"); const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]) + n); const z = x => String(x).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; }
+function lunesDe(iso){ const p = String(iso).split("-"); const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); const dow = d.getDay(); return fechaISOsumar(iso, -(dow === 0 ? 6 : dow - 1)); }
+function fechaCorta(iso){ const p = String(iso).split("-"); if (p.length !== 3) return iso; const m = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]; return Number(p[2]) + " " + m[Number(p[1]) - 1]; }
+function rangoPreset(k){
+    const hoy = fechaISOhoy();
+    if (k === "hoy")          return { desde: hoy, hasta: hoy };
+    if (k === "semana")       return { desde: lunesDe(hoy), hasta: hoy };
+    if (k === "semanaPasada") { const l = fechaISOsumar(lunesDe(hoy), -7); return { desde: l, hasta: fechaISOsumar(l, 6) }; }
+    if (k === "mes")          return { desde: hoy.slice(0, 8) + "01", hasta: hoy };
+    if (k === "mesPasado")    { const fin = fechaISOsumar(hoy.slice(0, 8) + "01", -1); return { desde: fin.slice(0, 8) + "01", hasta: fin }; }
+    return { desde: ESTADO.rango.desde || hoy, hasta: ESTADO.rango.hasta || hoy };
+}
+function elegirPreset(k){ const r = rangoPreset(k); ESTADO.rango.preset = k; cargarRango(r.desde, r.hasta); }
+function verRango(){
+    const d = document.getElementById("rDesde"), h = document.getElementById("rHasta");
+    if (!d || !h || !d.value || !h.value) { toast("Elige las dos fechas"); return; }
+    ESTADO.rango.preset = "custom"; cargarRango(d.value, h.value);
+}
+// Pide al motor la producción del rango y vuelve a dibujar. silencioso = refresco (no muestra "Cargando…").
+async function cargarRango(desde, hasta, silencioso){
+    if (desde > hasta) { const t = desde; desde = hasta; hasta = t; }
+    ESTADO.rango.desde = desde; ESTADO.rango.hasta = hasta; ESTADO.rango.error = "";
+    if (!silencioso) { ESTADO.rango.cargando = true; render(); }
+    try {
+        const r = await fetch(MOTOR_URL + "?action=produccion&desde=" + desde + "&hasta=" + hasta);
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || "El motor no respondió");
+        if (j.desde === desde && j.hasta === hasta) ESTADO.rango.datos = j;   // por si cambiaron de rango mientras cargaba
+    } catch (e) { ESTADO.rango.error = String(e.message || e).indexOf("fetch") >= 0 ? "Sin conexión con el motor" : String(e.message || e); }
+    ESTADO.rango.cargando = false;
+    if (!silencioso || ESTADO.vista === "adminRango" || ESTADO.vista === "adminPersonaDet") { const m = $app.querySelector("main"), sc = m ? m.scrollTop : 0; render(); const m2 = $app.querySelector("main"); if (m2) m2.scrollTop = sc; }
+}
+// Últimas 4 semanas (lunes de hace 3 semanas → hoy) para el Panel: gráfica de tendencia y completados de hoy.
+async function cargarRango28(forzar){
+    if (RANGO28_CARGANDO) return;
+    if (!forzar && RANGO28 && Date.now() - RANGO28_T < 300000) return;
+    RANGO28_CARGANDO = true;
+    try {
+        const hoy = fechaISOhoy(), desde = fechaISOsumar(lunesDe(hoy), -21);
+        const r = await fetch(MOTOR_URL + "?action=produccion&desde=" + desde + "&hasta=" + hoy);
+        const j = await r.json();
+        if (j.ok) { RANGO28 = j; RANGO28_T = Date.now(); if (ESTADO.vista === "adminPanel" && !forzar) { const m = $app.querySelector("main"), sc = m ? m.scrollTop : 0; render(); const m2 = $app.querySelector("main"); if (m2) m2.scrollTop = sc; } }
+        else if (!RANGO28) RANGO28 = { error: j.error || "sin datos" };
+    } catch (e) { if (!RANGO28) RANGO28 = { error: "sin conexión" }; }
+    RANGO28_CARGANDO = false;
+}
+// Tendencia por mínimos cuadrados: recta de a (primer día) a b (último) y cuánto cambió respecto al promedio.
+function tendenciaDe(vals){
+    const n = vals.length; if (n < 2) return { a: vals[0] || 0, b: vals[0] || 0, pct: 0, txt: "Sin tendencia aún", emoji: "➡️" };
+    const xm = (n - 1) / 2, ym = vals.reduce((a, v) => a + v, 0) / n;
+    let num = 0, den = 0; vals.forEach((v, i) => { num += (i - xm) * (v - ym); den += (i - xm) * (i - xm); });
+    const m = den ? num / den : 0, a = ym - m * xm, b = a + m * (n - 1);
+    const pct = ym ? Math.round((b - a) / ym * 100) : 0;
+    const txt = pct > 8 ? "Subiendo" : pct < -8 ? "Bajando" : "Estable", emoji = pct > 8 ? "📈" : pct < -8 ? "📉" : "➡️";
+    return { a, b, pct, txt, emoji };
+}
+// Gráfica de línea (SVG, sin librerías): puntos [{label, v}] + recta de tendencia punteada.
+function graficaLinea(puntos, opts){
+    opts = opts || {};
+    const n = puntos.length; if (!n) return `<p class="vacio">Sin datos.</p>`;
+    const W = 640, H = opts.alto || 220, ml = 44, mr = 18, mt = 22, mb = 34;
+    const max = Math.max(1, ...puntos.map(p => p.v));
+    const x = i => n === 1 ? ml + (W - ml - mr) / 2 : ml + i * (W - ml - mr) / (n - 1);
+    const y = v => mt + (H - mt - mb) * (1 - Math.max(0, v) / max);
+    const f = v => v.toFixed(1);
+    const t = tendenciaDe(puntos.map(p => p.v));
+    const poly = puntos.map((p, i) => `${f(x(i))},${f(y(p.v))}`).join(" ");
+    const area = n > 1 ? `<path d="M${f(x(0))},${f(y(0))} L${poly.split(" ").join(" L")} L${f(x(n-1))},${f(y(0))} Z" fill="#000" opacity=".06"/>` : "";
+    const trend = n > 1 ? `<line x1="${f(x(0))}" y1="${f(y(t.a))}" x2="${f(x(n-1))}" y2="${f(y(t.b))}" stroke="#999" stroke-width="2.5" stroke-dasharray="7 6"/>` : "";
+    const grid = [0.5, 1].map(k => `<line x1="${ml}" x2="${W - mr}" y1="${f(y(max*k))}" y2="${f(y(max*k))}" stroke="#eaeaea"/><text x="${ml - 8}" y="${f(y(max*k) + 4)}" font-size="11" text-anchor="end" fill="#999">${Math.round(max*k)}</text>`).join("");
+    const paso = Math.ceil(n / 8);
+    const labels = puntos.map((p, i) => (i % paso === 0 || i === n - 1) ? `<text x="${f(x(i))}" y="${H - 10}" font-size="11" text-anchor="middle" fill="#666">${p.label}</text>` : "").join("");
+    const dots = puntos.map((p, i) => `<circle cx="${f(x(i))}" cy="${f(y(p.v))}" r="4.5" fill="#000"/>${opts.valores && p.v ? `<text x="${f(x(i))}" y="${f(y(p.v) - 10)}" font-size="11" text-anchor="middle" fill="#000" font-weight="700">${p.v}</text>` : ""}`).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" class="grafica" role="img" aria-label="Producción por día">
+        ${grid}${area}<polyline points="${poly}" fill="none" stroke="#000" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>${trend}${dots}${labels}
+        <line x1="${ml}" x2="${W - mr}" y1="${f(y(0))}" y2="${f(y(0))}" stroke="#000" stroke-width="1"/>
+    </svg>`;
+}
+// Barras apiladas por día: Tapetes (negro) · Pisos (gris) · Otros (claro).
+function graficaFamilias(dias){
+    const n = dias.length; if (!n) return `<p class="vacio">Sin datos.</p>`;
+    const W = 640, H = 200, ml = 44, mr = 18, mt = 14, mb = 34, f = v => v.toFixed(1);
+    const max = Math.max(1, ...dias.map(d => d.piezas));
+    const ancho = (W - ml - mr) / n, bw = Math.max(4, ancho * 0.62);
+    const y = v => mt + (H - mt - mb) * (1 - v / max), y0 = y(0);
+    const paso = Math.ceil(n / 8);
+    const barras = dias.map((d, i) => {
+        const x = ml + i * ancho + (ancho - bw) / 2; let base = 0, html = "";
+        [["tapetes", "#000"], ["pisos", "#8a8a8a"], ["otros", "#d6d6d6"]].forEach(([k, col]) => {
+            const v = d[k] || 0; if (!v) return;
+            html += `<rect x="${f(x)}" y="${f(y(base + v))}" width="${f(bw)}" height="${f(y(base) - y(base + v))}" fill="${col}"/>`; base += v;
+        });
+        const lab = (i % paso === 0 || i === n - 1) ? `<text x="${f(x + bw / 2)}" y="${H - 10}" font-size="11" text-anchor="middle" fill="#666">${d.dia} ${Number(d.fecha.slice(8))}</text>` : "";
+        return html + lab;
+    }).join("");
+    const grid = [0.5, 1].map(k => `<line x1="${ml}" x2="${W - mr}" y1="${f(y(max*k))}" y2="${f(y(max*k))}" stroke="#eaeaea"/><text x="${ml - 8}" y="${f(y(max*k) + 4)}" font-size="11" text-anchor="end" fill="#999">${Math.round(max*k)}</text>`).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" class="grafica" role="img" aria-label="Tapetes y pisos por día">${grid}${barras}<line x1="${ml}" x2="${W - mr}" y1="${f(y0)}" y2="${f(y0)}" stroke="#000"/></svg>
+        <div class="leyenda"><span><i style="background:#000"></i>Tapetes</span><span><i style="background:#8a8a8a"></i>Pisos</span><span><i style="background:#d6d6d6"></i>Otros</span></div>`;
+}
+const nMX = v => Number(v || 0).toLocaleString('es-MX');
+// Panel: completados HOY (FULL y remisiones) según las 4 semanas cargadas.
+function completadosHoyHTML(){
+    if (!RANGO28 || RANGO28.error || !RANGO28.dias) return "";
+    const d = RANGO28.dias.find(x => x.fecha === fechaISOhoy()); if (!d) return "";
+    const fila = (txt, sub) => `<div class="item" style="border:none;padding:6px 0"><div><div class="sku" style="font-size:calc(14px * var(--esc))">${txt}</div><div class="desc">${sub}</div></div></div>`;
+    return `<div class="seccion-titulo" style="margin-top:20px">✅ Completados hoy <small>remisiones entregadas en Odoo y envíos FULL con su producción terminada</small></div>
+        <div class="fila-kpis">
+            <div class="card kpi"><div class="num">${d.remCompletadas.length}</div><div class="lbl">remisiones completadas<br>${d.remAtendidas} atendidas hoy</div></div>
+            <div class="card kpi"><div class="num">${d.fullCompletados.length}</div><div class="lbl">envíos FULL completados<br>${d.fullAtendidos} atendidos hoy</div></div>
+        </div>
+        ${d.remCompletadas.length || d.fullCompletados.length ? `<div class="card">
+            ${d.remCompletadas.map(r => fila(`🧺 ${r.name}`, `${escHTML(r.canal)} · ${nMX(r.pzs)} pzs producidas aquí de ${nMX(r.piezas)}`)).join("")}
+            ${d.fullCompletados.map(r => fila(`📦 Envío ${r.envio}`, `${escHTML(r.canal)} · ${nMX(r.pzs)} pzs producidas aquí de ${nMX(r.piezas)}`)).join("")}
+        </div>` : `<p class="vacio">Hoy todavía no se completa ninguna remisión ni envío FULL.</p>`}`;
+}
+// Panel: últimas 4 semanas (total por semana) con tendencia.
+function semanasHTML(){
+    if (!RANGO28) return `<p class="vacio">Cargando las últimas semanas…</p>`;
+    if (RANGO28.error || !RANGO28.dias) return `<p class="vacio">No se pudieron cargar las semanas (${RANGO28.error || "sin datos"}).</p>`;
+    const sem = {}; RANGO28.dias.forEach(d => { const l = lunesDe(d.fecha); sem[l] = (sem[l] || 0) + d.piezas; });
+    const puntos = Object.keys(sem).sort().map(l => ({ label: "sem " + fechaCorta(l), v: sem[l] }));
+    const t = tendenciaDe(puntos.map(p => p.v));
+    const cerradas = puntos.slice(0, -1), ultima = puntos[puntos.length - 1];
+    const prom = cerradas.length ? Math.round(cerradas.reduce((a, p) => a + p.v, 0) / cerradas.length) : 0;
+    return `<div class="card">
+        <div class="item" style="padding:0 0 6px"><div class="sku">${t.emoji} ${t.txt}</div><div class="cant" style="font-size:calc(14px * var(--esc))">${t.pct > 0 ? "+" : ""}${t.pct}%</div></div>
+        ${graficaLinea(puntos, { valores: true, alto: 200 })}
+        <div class="desc" style="margin-top:6px">Semana en curso: ${nMX(ultima ? ultima.v : 0)} pzs (lunes a hoy) · promedio de las semanas cerradas: ${nMX(prom)} pzs. La línea punteada es la tendencia.</div>
+    </div>`;
+}
+function verPersonaDet(persona, modo){ ESTADO.personaDet = { persona: persona, modo: modo }; ir("adminPersonaDet"); }
+function vistaAdminRango(){
+    const R = ESTADO.rango, D = R.datos;
+    if (!R.desde) { const r = rangoPreset("semana"); R.desde = r.desde; R.hasta = r.hasta; }
+    if (!D && !R.cargando && !R.error) cargarRango(R.desde, R.hasta);       // primera vez: la semana en curso
+    const presets = [["hoy", "Hoy"], ["semana", "Esta semana"], ["semanaPasada", "Semana pasada"], ["mes", "Este mes"], ["mesPasado", "Mes pasado"]];
+    const chips = `<div class="chips">${presets.map(([k, t]) => `<button class="${R.preset === k ? 'on' : ''}" onclick="elegirPreset('${k}')">${t}</button>`).join("")}</div>
+        <div class="fechas"><input type="date" id="rDesde" value="${R.desde}"><span class="desc">a</span><input type="date" id="rHasta" value="${R.hasta}"><button class="btn" onclick="verRango()">Ver</button></div>`;
+    let cuerpo = "";
+    if (R.cargando) cuerpo = `<p class="vacio">Cargando la producción del ${fechaCorta(R.desde)} al ${fechaCorta(R.hasta)}…</p>`;
+    else if (R.error) cuerpo = `<p class="vacio">⚠️ ${escHTML(R.error)}</p>`;
+    else if (D) {
+        const T = D.total, dias = D.dias, nd = dias.length;
+        const prom = T.diasConProduccion ? Math.round(T.piezas / T.diasConProduccion) : 0;
+        const ant = D.anterior, dif = ant && ant.piezas ? Math.round((T.piezas - ant.piezas) / ant.piezas * 100) : null;
+        const t = tendenciaDe(dias.map(d => d.piezas));
+        const bloquePersonas = (filas, modo, vacio) => filas.length ? filas.map(p => `
+            <div class="card toca-card" onclick="verPersonaDet(decodeURIComponent('${encodeURIComponent(p.persona)}'),'rango')">
+                <div class="item" style="padding:0">
+                    <div class="avatar" style="width:34px;height:34px;font-size:calc(13px * var(--esc))">${esRegEquipo(p) ? "👥" : inicial(p.persona)}</div>
+                    <div class="sku">${escHTML(p.persona)}</div><div class="cant">${nMX(p.piezas)} pzs ›</div>
+                </div>
+                <div class="prog"><span style="width:${Math.round(p.piezas / Math.max(1, filas[0].piezas) * 100)}%"></span></div>
+            </div>`).join("") : `<p class="vacio">${vacio}</p>`;
+        const ind = D.personas.filter(p => !esRegEquipo(p)), eq = D.personas.filter(esRegEquipo);
+        const listaComp = (arr, tipo) => arr.length ? arr.map(r => `<div class="item" style="border:none;padding:5px 0"><div><div class="sku" style="font-size:calc(14px * var(--esc))">${tipo === 'rem' ? '🧺 ' + escHTML(r.name) : '📦 Envío ' + escHTML(r.envio)}</div><div class="desc">${fechaBonita(r.fecha)} · ${escHTML(r.canal)} · ${nMX(r.pzs)} pzs producidas aquí de ${nMX(r.piezas)}</div></div></div>`).join("") : `<p class="vacio">Ninguno en este rango.</p>`;
+        const remComp = [].concat(...dias.map(d => d.remCompletadas.map(r => Object.assign({ fecha: d.fecha }, r))));
+        const fullComp = [].concat(...dias.map(d => d.fullCompletados.map(r => Object.assign({ fecha: d.fecha }, r))));
+        cuerpo = `
+        <div class="fila-kpis">
+            <div class="card negra kpi"><div class="num">${nMX(T.piezas)}</div><div class="lbl">piezas producidas<br>${fechaCorta(D.desde)}${nd > 1 ? " al " + fechaCorta(D.hasta) : ""}</div></div>
+            <div class="card kpi"><div class="num">${nMX(prom)}</div><div class="lbl">piezas por día<br>${T.diasConProduccion} día${T.diasConProduccion === 1 ? "" : "s"} con producción de ${nd}</div></div>
+        </div>
+        <div class="card">
+            <div class="item" style="padding:0"><div class="sku">${t.emoji} ${t.txt}</div><div class="cant" style="font-size:calc(14px * var(--esc))">${dif === null ? "sin periodo anterior" : (dif > 0 ? "+" : "") + dif + "% vs anterior"}</div></div>
+            ${nd > 1 ? graficaLinea(dias.map(d => ({ label: d.dia + " " + Number(d.fecha.slice(8)), v: d.piezas })), { valores: nd <= 10 }) : ""}
+            <div class="desc" style="margin-top:6px">${dif === null ? `No hay producción registrada del ${fechaCorta(ant.desde)} al ${fechaCorta(ant.hasta)} para comparar.` : `Periodo anterior (${fechaCorta(ant.desde)} al ${fechaCorta(ant.hasta)}): ${nMX(ant.piezas)} pzs.`}${nd > 1 ? " La línea punteada es la tendencia dentro del rango." : ""}</div>
+        </div>
+        <div class="seccion-titulo" style="margin-top:20px">Tapetes y pisos <small>por día y en total</small></div>
+        <div class="fila-kpis tres">
+            <div class="card kpi"><div class="num">${nMX(T.tapetes)}</div><div class="lbl">🧘 Tapetes</div></div>
+            <div class="card kpi"><div class="num">${nMX(T.pisos)}</div><div class="lbl">🧱 Pisos</div></div>
+            <div class="card kpi"><div class="num">${nMX(T.otros)}</div><div class="lbl">Otros</div></div>
+        </div>
+        ${nd > 1 ? `<div class="card">${graficaFamilias(dias)}</div>` : ""}
+        <div class="seccion-titulo" style="margin-top:20px">Por día <small>piezas · tapetes/pisos · remisiones y FULL completados</small></div>
+        <div class="card tabla-dias">
+            ${dias.map(d => `<div class="item"><div class="desc" style="width:62px;color:var(--negro);font-weight:600">${d.dia} ${Number(d.fecha.slice(8))}</div>
+                <div class="desc" style="flex:1">${d.piezas ? `🧘 ${nMX(d.tapetes)} · 🧱 ${nMX(d.pisos)}${d.otros ? " · otros " + nMX(d.otros) : ""}` : "sin producción"}${d.remCompletadas.length || d.fullCompletados.length ? `<br>✅ ${d.remCompletadas.length} remisi${d.remCompletadas.length === 1 ? "ón" : "ones"} · ${d.fullCompletados.length} FULL` : ""}</div>
+                <div class="cant">${nMX(d.piezas)}</div></div>`).join("")}
+        </div>
+        <div class="seccion-titulo" style="margin-top:20px">✅ Remisiones completadas <small>${remComp.length} entregadas en Odoo en el rango (de las que llevan producción)</small></div>
+        <div class="card">${listaComp(remComp, 'rem')}</div>
+        <div class="seccion-titulo" style="margin-top:20px">✅ Envíos FULL completados <small>${fullComp.length} con su producción terminada en el rango</small></div>
+        <div class="card">${listaComp(fullComp, 'full')}</div>
+        <div class="seccion-titulo" style="margin-top:20px">Por origen <small>Colecta · FULL · Colchón (con sus extras)</small></div>
+        <div class="card">
+            <div class="item" style="border:none;padding-top:0"><div class="desc">🧺 Colecta</div><div class="cant">${nMX(T.colecta)} pzs</div></div>
+            <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${nMX(T.full)} pzs</div></div>
+            <div class="item" style="border:none"><div class="desc">🧱 Colchón</div><div class="cant">${nMX(T.colchon)} pzs</div></div>
+        </div>
+        <div class="seccion-titulo" style="margin-top:14px">🧱 Extras del rango <small>piezas de colchón por SKU, de mayor a menor</small></div>
+        ${D.extras.length ? D.extras.map((e, i) => `<div class="card" style="padding:10px 16px"><div class="item" style="padding:0">
+            <div style="width:28px;text-align:center;color:var(--gris)">${i + 1}</div>
+            <div style="flex:1"><div class="sku">${escHTML(e.nombre)}</div><div class="desc">${escHTML(e.sku)}</div></div>
+            <div class="cant">${nMX(e.piezas)} pzs</div></div></div>`).join("") : `<p class="vacio">No se registró colchón en este rango.</p>`}
+        <div class="seccion-titulo" style="margin-top:20px">Top 10 SKUs <small>lo más producido en el rango</small></div>
+        ${D.topSkus.length ? D.topSkus.map((e, i) => `<div class="card" style="padding:10px 16px"><div class="item" style="padding:0">
+            <div style="width:28px;text-align:center;color:var(--gris)">${i + 1}</div>
+            <div style="flex:1"><div class="sku">${escHTML(e.nombre)}</div><div class="desc">${escHTML(e.sku)} · ${e.familia}</div></div>
+            <div class="cant">${nMX(e.piezas)} pzs</div></div></div>`).join("") : `<p class="vacio">Sin producción en este rango.</p>`}
+        <div class="seccion-titulo" style="margin-top:20px">Individual <small>toca una tarjeta para ver qué hizo</small></div>
+        ${bloquePersonas(ind, 'rango', "Sin producción individual en este rango.")}
+        <div class="seccion-titulo" style="margin-top:20px">Equipos <small>la producción cuenta para el equipo completo</small></div>
+        ${bloquePersonas(eq, 'rango', "Sin producción en equipo en este rango.")}
+        ${D.avisos && D.avisos.length ? `<p class="vacio">⚠️ ${D.avisos.map(escHTML).join("<br>")}</p>` : ""}`;
+    }
+    return header("Rango de fechas", "Producción por periodo") + `<main>${chips}${cuerpo}<div class="sello">CERO HUMO · CERO ATAJOS</div></main>` + tabbarAdmin();
+}
+// Detalle de una persona o equipo: qué hizo (por SKU) y sus registros, de hoy o del rango abierto.
+function vistaAdminPersonaDet(){
+    const P = ESTADO.personaDet; if (!P) { ir("adminPersona"); return ""; }
+    const esHoy = P.modo === "hoy", R = ESTADO.rango;
+    const regs = (esHoy ? REGISTROS : ((R.datos && R.datos.registros) || [])).filter(r => r.persona === P.persona);
+    const total = regs.reduce((a, r) => a + r.cantidad, 0);
+    const porSku = {};
+    regs.forEach(r => { const o = porSku[r.sku] = porSku[r.sku] || { sku: r.sku, desc: r.desc || prod(r.sku).desc, familia: r.familia || familiaDe(r.sku) || "Otros", total: 0, colecta: 0, full: 0, colchon: 0 };
+        o.total += r.cantidad; if (r.origen === 'FULL') o.full += r.cantidad; else if (r.origen === 'Colchón') o.colchon += r.cantidad; else o.colecta += r.cantidad; });
+    const skus = Object.keys(porSku).map(k => porSku[k]).sort((a, b) => b.total - a.total);
+    const sub = esHoy ? "Hoy" : `${fechaCorta(R.desde)}${R.desde !== R.hasta ? " al " + fechaCorta(R.hasta) : ""}`;
+    const origenes = o => [o.colecta ? `🧺 ${nMX(o.colecta)}` : "", o.full ? `📦 ${nMX(o.full)}` : "", o.colchon ? `🧱 ${nMX(o.colchon)}` : ""].filter(Boolean).join(" · ");
+    const filaRango = r => `<div class="card" style="padding:12px 16px"><div class="item" style="padding:0">
+            <div><div class="sku">${escHTML(r.desc || prod(r.sku).desc)} · ${r.cantidad} pzs</div>
+                 <div class="desc">${fechaBonita(r.fecha)} · <span class="hora">${r.hora}</span> · ${origenTxt(r)}</div></div></div></div>`;
+    const tap = skus.filter(x => x.familia === 'Tapetes').reduce((a, x) => a + x.total, 0), pis = skus.filter(x => x.familia === 'Pisos').reduce((a, x) => a + x.total, 0);
+    return header(P.persona.replace(/^Equipo:\s*/, "👥 "), sub) + `<main>
+        <div class="card negra kpi"><div class="num">${nMX(total)}</div><div class="lbl">piezas · ${regs.length} registro${regs.length === 1 ? "" : "s"} · 🧘 ${nMX(tap)} · 🧱 ${nMX(pis)}</div></div>
+        <div class="seccion-titulo">Qué hizo <small>por SKU, de mayor a menor</small></div>
+        ${skus.length ? skus.map(o => `<div class="card" style="padding:12px 16px"><div class="item" style="padding:0">
+            <div style="flex:1;min-width:0"><div class="sku">${escHTML(o.desc)}</div><div class="desc">${escHTML(o.sku)} · ${o.familia} · ${origenes(o)}</div></div>
+            <div class="cant">${nMX(o.total)} pzs</div></div></div>`).join("") : `<p class="vacio">Sin registros${esHoy ? " hoy" : " en este rango"}.</p>`}
+        <div class="seccion-titulo" style="margin-top:20px">Registros <small>${esHoy ? "de hoy, uno por uno (se pueden deshacer)" : "del rango, del más reciente al más viejo"}</small></div>
+        ${regs.length ? (esHoy ? [...regs].reverse().map(filaHistorial) : regs.map(filaRango)).join("") : ""}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbarAdmin();
+}
+
 /* Suma de hoy por quien produjo, partida en Individual / Equipos (Fase 1) */
 function esRegEquipo(r){ return r.tipo === 'Equipo' || String(r.persona).indexOf('Equipo:') === 0; }
 function sumarPor(regs){
@@ -1858,16 +2135,16 @@ function vistaAdminPersona(){
     const bloque = (filas, vacio) => {
         const max = filas.length ? filas[0][1] : 1;
         return filas.length ? filas.map(([n,c])=>`
-            <div class="card">
+            <div class="card toca-card" onclick="verPersonaDet(decodeURIComponent('${encodeURIComponent(n)}'),'hoy')">
                 <div class="item" style="padding:0">
                     <div class="avatar" style="width:34px;height:34px;font-size:calc(13px * var(--esc))">${esRegEquipo({persona:n}) ? "👥" : inicial(n)}</div>
-                    <div class="sku">${n}</div><div class="cant">${c} pzs</div>
+                    <div class="sku">${n}</div><div class="cant">${c} pzs ›</div>
                 </div>
                 <div class="prog"><span style="width:${Math.round(c/max*100)}%"></span></div>
             </div>`).join("") : `<p class="vacio">${vacio}</p>`;
     };
     return header("Por persona", "Producción de hoy") + `<main>
-        <div class="seccion-titulo">Individual <small>Quienes trabajaron solos hoy</small></div>
+        <div class="seccion-titulo">Individual <small>Quienes trabajaron solos hoy · toca una tarjeta para ver qué hizo</small></div>
         ${bloque(ind, "Nadie ha registrado producción individual hoy.")}
         <div class="seccion-titulo" style="margin-top:24px">Equipos <small>La producción cuenta para el equipo completo</small></div>
         ${bloque(eq, "Hoy no se ha registrado producción en equipo.")}
@@ -1907,6 +2184,7 @@ function render() {
         pendientes: vistaPendientes, skuDetalle: vistaSkuDetalle, fullDetalle: vistaFullDetalle,
         remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial, sesion: vistaSesion,
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking, adminHistorial: vistaAdminHistorial,
+        adminRango: vistaAdminRango, adminPersonaDet: vistaAdminPersonaDet,   // 23-oct
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
     const m = $app.querySelector("main"); if (m) m.scrollTop = 0;  // el centro arranca arriba
