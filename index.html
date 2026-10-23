@@ -220,7 +220,7 @@
         .chip.urgente { background: var(--negro); color: var(--blanco); }
         .chip.listo { background: #e3f6e9; color: #1e7a3c; border-color: #9fdcb3; }   /* 21-oct: envío FULL con la producción completa */
 
-        /* Pestañas (cortes C1/C2/C3) */
+        /* Pestañas (cortes C1/C2/C3… los que traiga el machote) */
         .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
         .tabs button {
             flex: 1; padding: 10px; border-radius: 12px; cursor: pointer;
@@ -370,7 +370,11 @@ let PERSONAS = [
 
 // ⭐ MACHOTE de HOY (qué producir por corte) — se carga del motor (archivo de Sofi).
 //    cortes: { C1:[{sku,nombre,meta,familia}], C2:[...], C3:[...] }
-let MACHOTE = { fecha: "", archivo: "", esDeHoy: true, cortes: { C1: [], C2: [], C3: [] } };
+let MACHOTE = { fecha: "", archivo: "", esDeHoy: true, cortes: { C1: [], C2: [], C3: [] }, horarios: {} };
+// 23-oct: los cortes ya no son fijos. Lista ordenada de los que trae el machote (C1, C2, C3… y C4 si Sofi lo agrega).
+const HORARIO_FIJO = { C1: "8–9h", C2: "9–12h", C3: "12–17h" };
+function cortesLista(){ const ks = Object.keys((MACHOTE && MACHOTE.cortes) || {}); ["C1","C2","C3"].forEach(c => { if (ks.indexOf(c) < 0) ks.push(c); }); return ks.sort((x, y) => Number(x.slice(1)) - Number(y.slice(1))); }
+function horarioDe(c){ const h = (MACHOTE.horarios || {})[c]; return h ? h.replace(/:00/g, "").replace(/\s*-\s*/, "–") + "h" : (HORARIO_FIJO[c] || ""); }
 
 // FULL pendientes por fecha límite — del motor (REGISTRO_ENVIOS.xlsx).
 //    cada uno: { envio, canal, entrega, entregaISO, piezas, piezasPendientes, skus }
@@ -431,7 +435,7 @@ function prod(sku){
 // Lista plana de SKUs del machote de hoy (deduplicada, meta sumada entre cortes).
 function machoteSKUs(familia){
     var map = {};
-    ["C1","C2","C3"].forEach(function(c){
+    cortesLista().forEach(function(c){
         (MACHOTE.cortes[c] || []).forEach(function(it){
             if (familia && it.familia !== familia) return;
             if (!map[it.sku]) map[it.sku] = { sku: it.sku, nombre: it.nombre, familia: it.familia, meta: 0 };
@@ -1423,7 +1427,7 @@ function colectaPorSKU(){
         </div>`;
     }).join("");
     return `<div class="tabs">
-            ${["C1","C2","C3"].map(c=>`<button class="${ESTADO.corte===c?'on':''}" onclick="ESTADO.corte='${c}';render()">${c}<small>${c==='C1'?'8–9h':c==='C2'?'9–12h':'12–17h'}</small></button>`).join("")}
+            ${cortesLista().map(c=>`<button class="${ESTADO.corte===c?'on':''}" onclick="ESTADO.corte='${c}';render()">${c}<small>${horarioDe(c)}</small></button>`).join("")}
         </div>
         ${items.length ? `
             ${tapetes.length && famFiltro() !== 'Pisos' ? `<div class="seccion-titulo" style="font-size:calc(12px * var(--esc));margin-bottom:8px">Tapetes</div>${bloque(tapetes)}` : ``}
@@ -1474,9 +1478,9 @@ function vistaSkuDetalle(){
     const info = machoteSKUs("").find(x => x.sku === sku) || { sku: sku, nombre: NOMBRES[sku] || prod(sku).desc, familia: prod(sku).familia, meta: 0 };
     const hecho = producidoDe(sku);
     const pct = info.meta ? Math.min(100, Math.round(hecho / info.meta * 100)) : 0;
-    const porCorte = ["C1","C2","C3"].map(c => {
+    const porCorte = cortesLista().map(c => {
         const it = (MACHOTE.cortes[c] || []).find(x => x.sku === sku);
-        return it ? `<div class="item"><div class="desc">Corte ${c} (${c==='C1'?'8–9h':c==='C2'?'9–12h':'12–17h'})</div><div class="cant" style="font-size:calc(14px * var(--esc))">${it.meta} pzs</div></div>` : "";
+        return it ? `<div class="item"><div class="desc">Corte ${c} (${horarioDe(c)})</div><div class="cant" style="font-size:calc(14px * var(--esc))">${it.meta} pzs</div></div>` : "";
     }).join("");
     return header(info.nombre, sku) + `<main>
         <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
@@ -1496,7 +1500,7 @@ function vistaSkuDetalle(){
    Solo cuentan las líneas PRODUCIBLES (SKU que está en el machote de hoy). */
 function machoteSet(){
     const s = {};
-    ["C1","C2","C3"].forEach(c => (MACHOTE.cortes[c]||[]).forEach(it => { s[it.sku] = true; }));
+    cortesLista().forEach(c => (MACHOTE.cortes[c]||[]).forEach(it => { s[it.sku] = true; }));
     return s;
 }
 function remisionesConAvance(){
@@ -1859,7 +1863,7 @@ function vistaAdminPanel(){
         <div class="card">
             <div class="item" style="padding:0"><div class="sku">Avance del machote de hoy</div><div class="cant">${pct}%</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
-            <div class="desc" style="margin-top:8px">${totalHecho} de ${totalMeta} piezas del machote (cortes C1–C3)</div>
+            <div class="desc" style="margin-top:8px">${totalHecho} de ${totalMeta} piezas del machote (cortes ${cortesLista()[0]}–${cortesLista().slice(-1)[0]})</div>
         </div>
         ${rems.length ? `<div class="card">
             <div class="item" style="padding:0"><div class="sku">Colecta (remisiones)</div><div class="cant">${remCompletas}/${rems.length}</div></div>
