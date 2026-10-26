@@ -319,6 +319,15 @@
         .leyenda i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
         .tabla-dias .item { padding:8px 0; gap:8px; }
         .tabla-dias .item .desc { min-width:0; }
+        /* 26-oct: tabla persona × día (admin · Rango) */
+        .scrollx { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+        .matriz { border-collapse:collapse; width:100%; font-size:calc(12px * var(--esc)); }
+        .matriz th, .matriz td { padding:6px 5px; text-align:right; border-bottom:1px solid var(--linea); white-space:nowrap; }
+        .matriz thead th { font-weight:600; color:var(--gris); font-size:calc(11px * var(--esc)); }
+        .matriz thead th small { font-weight:100; }
+        .matriz tbody th { text-align:left; color:var(--negro); font-weight:600; max-width:130px; white-space:normal; }
+        .matriz .tot { font-weight:900; }
+        .matriz .m { color:#c8c8c8; }
         .toca-card { cursor:pointer; }
     </style>
 </head>
@@ -414,7 +423,7 @@ let ESTADO = {
     filtroPersona: "",  // filtro del resumen de hoy en el inicio ("" = todas las personas)
     filtroHist: "",     // filtro del historial del administrador ("" = todas las personas)
     mesSel: "",         // mes elegido en "Cierre de mes" del admin ("" = el más reciente)
-    rango: { preset: "semana", desde: "", hasta: "", datos: null, cargando: false, error: "" },   // 23-oct: producción por rango (admin)
+    rango: { preset: "semana", desde: "", hasta: "", datos: null, cargando: false, error: "", filtroTabla: "todos" },   // 23-oct: producción por rango (admin)
     personaDet: null,   // 23-oct: { persona, modo: "hoy" | "rango" } → detalle de qué hizo una persona o equipo
     corte: "C1",        // corte seleccionado
     colectaVista: "sku",// "sku" (machote) o "remision" (Odoo, se llena al producir)
@@ -896,7 +905,7 @@ function header(titulo, sub) {
         <div class="titulo"><h1>${titulo}</h1><p>${sub || "Almacén CeroCero"}</p></div>
         ${botonRefrescar()}
         ${ESTADO.usuario ? (ESTADO.usuario.rol === "admin"
-            ? `<div class="usuario">${nombreCorto(ESTADO.usuario)}</div>`
+            ? `<div class="usuario toca" onclick="salirAdmin()" title="Salir del administrador">${nombreCorto(ESTADO.usuario)} ›</div>`
             : `<div class="usuario toca" onclick="ir('sesion')" title="Cambiar de equipo o salir">${nombreCorto(ESTADO.usuario)} ›</div>`) : ""}
     </header>`;
 }
@@ -969,6 +978,8 @@ function salir(aDonde) {
     ESTADO.usuario = null; ESTADO.equipoSel = []; ESTADO.modo = null; ESTADO.filtroPersona = ""; ESTADO.editandoEquipo = false;
     ir(aDonde || "modo");
 }
+// 26-oct (junta con Karla): salir del administrador desde el encabezado (antes no había una salida visible).
+function salirAdmin(){ if (!confirm("¿Salir del panel de administrador?")) return; salir("bienvenida"); }
 // Integrantes de un registro de equipo ("A, B" de la columna Integrantes; si no, del nombre "Equipo: A, B")
 function integrantesDe(r) {
     const s = r.integrantes || String(r.persona).replace(/^Equipo:\s*/, "");
@@ -1828,6 +1839,7 @@ function vistaAdminPanel(){
             <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${fullHoy} pzs</div></div>
             <div class="item" style="border:none"><div class="desc">🧱 Colchón</div><div class="cant">${colchonHoy} pzs</div></div>
         </div>
+        ${rendimientoHoraHTML(REGISTROS, "⏱ Hoy por hora", "piezas por hora del día · se actualiza solo")}
         ${completadosHoyHTML()}
         <div class="seccion-titulo" style="margin-top:20px">Últimas 4 semanas <small>¿la producción va subiendo o bajando?</small></div>
         ${semanasHTML()}
@@ -2059,6 +2071,7 @@ function vistaAdminRango(){
             ${nd > 1 ? graficaLinea(dias.map(d => ({ label: d.dia + " " + Number(d.fecha.slice(8)), v: d.piezas })), { valores: nd <= 10 }) : ""}
             <div class="desc" style="margin-top:6px">${dif === null ? `No hay producción registrada del ${fechaCorta(ant.desde)} al ${fechaCorta(ant.hasta)} para comparar.` : `Periodo anterior (${fechaCorta(ant.desde)} al ${fechaCorta(ant.hasta)}): ${nMX(ant.piezas)} pzs.`}${nd > 1 ? " La línea punteada es la tendencia dentro del rango." : ""}</div>
         </div>
+        ${rendimientoHoraHTML(D.registros || [], "⏱ Rendimiento por hora", "piezas por hora del día en el periodo")}
         <div class="seccion-titulo" style="margin-top:20px">Tapetes y pisos <small>por día y en total</small></div>
         <div class="fila-kpis tres">
             <div class="card kpi"><div class="num">${nMX(T.tapetes)}</div><div class="lbl">🧘 Tapetes</div></div>
@@ -2072,6 +2085,10 @@ function vistaAdminRango(){
                 <div class="desc" style="flex:1">${d.piezas ? `🧘 ${nMX(d.tapetes)} · 🧱 ${nMX(d.pisos)}${d.otros ? " · otros " + nMX(d.otros) : ""}` : "sin producción"}${d.remCompletadas.length || d.fullCompletados.length ? `<br>✅ ${d.remCompletadas.length} remisi${d.remCompletadas.length === 1 ? "ón" : "ones"} · ${d.fullCompletados.length} FULL` : ""}</div>
                 <div class="cant">${nMX(d.piezas)}</div></div>`).join("")}
         </div>
+        <div class="seccion-titulo" style="margin-top:20px">📋 Por persona y por ${nd > 16 ? "semana" : "día"} <small>toca Individual o Equipos para filtrar · total · promedio por día trabajado</small></div>
+        ${tablaPersonaDiaHTML(D)}
+        <button class="btn blanco" style="margin-top:12px" onclick="descargarCSVRango()"><span class="ico">⬇️</span> Descargar Excel del periodo <span class="flecha">→</span></button>
+        <div class="desc" style="text-align:center;margin-top:-4px">${nMX(T.registros)} registros uno por uno: fecha, hora, persona, SKU, cantidad, origen y referencia.</div>
         <div class="seccion-titulo" style="margin-top:20px">✅ Remisiones completadas <small>${remComp.length} entregadas en Odoo en el rango (de las que llevan producción)</small></div>
         <div class="card">${listaComp(remComp, 'rem')}</div>
         <div class="seccion-titulo" style="margin-top:20px">✅ Envíos FULL completados <small>${fullComp.length} con su producción terminada en el rango</small></div>
@@ -2118,7 +2135,8 @@ function vistaAdminPersonaDet(){
     const tap = skus.filter(x => x.familia === 'Tapetes').reduce((a, x) => a + x.total, 0), pis = skus.filter(x => x.familia === 'Pisos').reduce((a, x) => a + x.total, 0);
     return header(P.persona.replace(/^Equipo:\s*/, "👥 "), sub) + `<main>
         <div class="card negra kpi"><div class="num">${nMX(total)}</div><div class="lbl">piezas · ${regs.length} registro${regs.length === 1 ? "" : "s"} · 🧘 ${nMX(tap)} · 🧱 ${nMX(pis)}</div></div>
-        <div class="seccion-titulo">Qué hizo <small>por SKU, de mayor a menor</small></div>
+        ${esHoy ? rendimientoHoraHTML(regs, "⏱ Hoy por hora", "cuándo produjo más") : rendimientoDiasHTML(regs)}
+        <div class="seccion-titulo" style="margin-top:20px">Qué hizo <small>por SKU, de mayor a menor</small></div>
         ${skus.length ? skus.map(o => `<div class="card" style="padding:12px 16px"><div class="item" style="padding:0">
             <div style="flex:1;min-width:0"><div class="sku">${escHTML(o.desc)}</div><div class="desc">${escHTML(o.sku)} · ${o.familia} · ${origenes(o)}</div></div>
             <div class="cant">${nMX(o.total)} pzs</div></div></div>`).join("") : `<p class="vacio">Sin registros${esHoy ? " hoy" : " en este rango"}.</p>`}
@@ -2126,6 +2144,97 @@ function vistaAdminPersonaDet(){
         ${regs.length ? (esHoy ? [...regs].reverse().map(filaHistorial) : regs.map(filaRango)).join("") : ""}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
+}
+
+/* =================================================================
+   26-oct (Britanie, junta con Karla): RENDIMIENTO POR TIEMPO Y POR PERSONA/DÍA (solo front; el motor ya guarda la hora)
+   - Panel y detalle de hoy: "⏱ Hoy por hora". Rango: "⏱ Rendimiento por hora" + tabla persona/equipo × día
+     (o × semana si el rango pasa de 16 días) con filtro Todos / Individual / Equipos + "Descargar Excel del periodo".
+   - Detalle de persona o equipo en rango: "📆 Rendimiento por día" (piezas, registros, horas activas, ritmo).
+   - Hora "activa" = hora del día con al menos un registro; ritmo = piezas entre horas activas.
+   ================================================================= */
+function graficaBarras(puntos, opts){
+    opts = opts || {};
+    const n = puntos.length; if (!n) return `<p class="vacio">Sin datos.</p>`;
+    const W = 640, H = opts.alto || 200, ml = 12, mr = 12, mt = 24, mb = 30;
+    const max = Math.max(1, ...puntos.map(p => p.v));
+    const bw = (W - ml - mr) / n, f = v => v.toFixed(1);
+    const barras = puntos.map((p, i) => {
+        const h = (H - mt - mb) * p.v / max, x = ml + i * bw + bw * 0.15, y = H - mb - h;
+        return `<rect x="${f(x)}" y="${f(y)}" width="${f(bw * 0.7)}" height="${f(h)}" rx="4" fill="${p.v === max ? '#000' : '#9a9a9a'}"/>` +
+               (p.v ? `<text x="${f(x + bw * 0.35)}" y="${f(y - 5)}" font-size="11" text-anchor="middle" fill="#000" font-weight="600">${nMX(p.v)}</text>` : "");
+    }).join("");
+    const paso = Math.ceil(n / 12);
+    const labels = puntos.map((p, i) => (i % paso === 0 || i === n - 1) ? `<text x="${f(ml + i * bw + bw / 2)}" y="${H - 10}" font-size="11" text-anchor="middle" fill="#666">${p.label}</text>` : "").join("");
+    return `<svg viewBox="0 0 ${W} ${H}" class="grafica" role="img" aria-label="${opts.label || 'Barras'}">${barras}${labels}<line x1="${ml}" x2="${W - mr}" y1="${H - mb}" y2="${H - mb}" stroke="#000"/></svg>`;
+}
+// Piezas por hora del día (de 8 a 18 h, o más si hubo registros fuera) + ritmo por hora activa y mejor hora.
+function rendimientoHoraHTML(regs, titulo, sub){
+    const porHora = {}, activas = {};
+    regs.forEach(r => { const h = parseInt(String(r.hora || "").slice(0, 2)); if (isNaN(h)) return; porHora[h] = (porHora[h] || 0) + r.cantidad; activas[r.fecha + "_" + h] = 1; });
+    const hs = Object.keys(porHora).map(Number);
+    const cab = `<div class="seccion-titulo" style="margin-top:20px">${titulo} <small>${sub}</small></div>`;
+    if (!hs.length) return cab + `<div class="card"><p class="vacio" style="padding:10px 0">Sin registros todavía.</p></div>`;
+    const h0 = Math.min(8, ...hs), h1 = Math.max(18, ...hs);
+    const puntos = []; for (let h = h0; h <= h1; h++) puntos.push({ label: h + "h", v: porHora[h] || 0 });
+    const total = regs.reduce((a, r) => a + r.cantidad, 0), nAct = Object.keys(activas).length;
+    const mejor = hs.reduce((a, h) => porHora[h] > porHora[a] ? h : a, hs[0]);
+    return cab + `<div class="card">
+            <div class="item" style="padding:0 0 6px"><div class="sku">⚡ ${nMX(Math.round(total / Math.max(1, nAct)))} pzs por hora activa</div><div class="cant" style="font-size:calc(14px * var(--esc))">mejor: ${mejor}:00 · ${nMX(porHora[mejor])}</div></div>
+            ${graficaBarras(puntos, { label: "Piezas por hora" })}
+            <div class="desc" style="margin-top:6px">${nAct} hora${nAct === 1 ? "" : "s"} con registros. Una hora activa es una en la que se registró al menos una vez.</div>
+        </div>`;
+}
+// Tabla persona/equipo × día (hasta 16 días) o × semana (rangos más largos). Filtro Todos / Individual / Equipos.
+function setFiltroTabla(v){ const m = $app.querySelector("main"), sc = m ? m.scrollTop : 0; ESTADO.rango.filtroTabla = v; render(); const m2 = $app.querySelector("main"); if (m2) m2.scrollTop = sc; }
+function tablaPersonaDiaHTML(D){
+    const regs = D.registros || [], filtro = ESTADO.rango.filtroTabla || "todos";
+    const porSemana = D.dias.length > 16, colDe = f => porSemana ? lunesDe(f) : f;
+    const cols = []; D.dias.forEach(d => { const c = colDe(d.fecha); if (cols.indexOf(c) < 0) cols.push(c); });
+    const pers = {};
+    regs.forEach(r => {
+        if (filtro === "ind" && esRegEquipo(r)) return; if (filtro === "eq" && !esRegEquipo(r)) return;
+        const o = pers[r.persona] = pers[r.persona] || { persona: r.persona, tot: 0, dias: {}, cols: {} };
+        o.tot += r.cantidad; o.dias[r.fecha] = 1; const c = colDe(r.fecha); o.cols[c] = (o.cols[c] || 0) + r.cantidad;
+    });
+    const filas = Object.keys(pers).map(k => pers[k]).sort((a, b) => b.tot - a.tot);
+    const chips = `<div class="chips" style="margin-bottom:8px">${[["todos", "Todos"], ["ind", "Individual"], ["eq", "Equipos"]].map(([k, t]) => `<button class="${filtro === k ? 'on' : ''}" onclick="setFiltroTabla('${k}')">${t}</button>`).join("")}</div>`;
+    if (!filas.length) return chips + `<div class="card"><p class="vacio" style="padding:10px 0">Sin producción con este filtro.</p></div>`;
+    const DN = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+    const cab = cols.map(c => { const p = c.split("-"); const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); return `<th>${porSemana ? "Sem" : DN[d.getDay()]}<br><small>${fechaCorta(c)}</small></th>`; }).join("");
+    const nombre = p => esRegEquipo({ persona: p }) ? "👥 " + p.replace(/^Equipo:\s*/, "").split(",").map(x => x.trim().split(" ")[0]).join(" · ") : p;
+    const cuerpo = filas.map(o => { const nd = Object.keys(o.dias).length;
+        return `<tr><th>${escHTML(nombre(o.persona))}</th>${cols.map(c => `<td>${o.cols[c] ? nMX(o.cols[c]) : '<span class="m">–</span>'}</td>`).join("")}<td class="tot">${nMX(o.tot)}</td><td class="tot">${nMX(Math.round(o.tot / nd))}</td></tr>`; }).join("");
+    return chips + `<div class="card" style="padding:10px"><div class="scrollx"><table class="matriz"><thead><tr><th></th>${cab}<th>Total</th><th>Prom/día</th></tr></thead><tbody>${cuerpo}</tbody></table></div>
+        <div class="desc" style="margin-top:6px">${porSemana ? "Rango largo: cada columna es una semana (desde su lunes). " : ""}Prom/día = total entre los días en que esa persona o equipo registró.</div></div>`;
+}
+// Excel del periodo: los registros uno por uno en CSV (Excel lo abre directo; con BOM para que salgan los acentos).
+function descargarCSVRango(){
+    const D = ESTADO.rango.datos; if (!D || !D.registros || !D.registros.length) { toast("No hay registros en este periodo"); return; }
+    const esc = v => { const s = String(v == null ? "" : v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const cab = ["Fecha", "Hora", "Persona o equipo", "Tipo", "Integrantes", "SKU", "Descripción", "Familia", "Cantidad", "Origen", "Referencia"];
+    const filas = D.registros.map(r => [r.fecha, r.hora, r.persona, r.tipo || (esRegEquipo(r) ? "Equipo" : "Individual"), r.integrantes || "", r.sku, r.desc || "", r.familia || "", r.cantidad, r.origen || "", r.ref || ""]);
+    const csv = "﻿" + [cab].concat(filas).map(f => f.map(esc).join(",")).join("\r\n");
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    a.download = "produccion_" + D.desde + "_" + D.hasta + ".csv"; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast("Descargando " + D.registros.length + " registros");
+}
+// Rendimiento por día de una persona o equipo: piezas, registros, horas activas y ritmo (detalle en rango).
+function rendimientoDiasHTML(regs){
+    const porDia = {};
+    regs.forEach(r => { const o = porDia[r.fecha] = porDia[r.fecha] || { fecha: r.fecha, pzs: 0, n: 0, horas: {} }; o.pzs += r.cantidad; o.n++; const h = parseInt(String(r.hora || "").slice(0, 2)); if (!isNaN(h)) o.horas[h] = 1; });
+    const dias = Object.keys(porDia).sort().map(k => porDia[k]); if (!dias.length) return "";
+    const DN = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+    const nomDia = f => { const p = f.split("-"); return DN[new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).getDay()] + " " + Number(p[2]); };
+    const act = d => Object.keys(d.horas).length;
+    const hsTot = dias.reduce((a, d) => a + act(d), 0), pzTot = dias.reduce((a, d) => a + d.pzs, 0);
+    const rangoH = d => { const hs = Object.keys(d.horas).map(Number).sort((a, b) => a - b); return hs.length ? hs[0] + ":00–" + (hs[hs.length - 1] + 1) + ":00" : ""; };
+    return `<div class="seccion-titulo" style="margin-top:20px">📆 Rendimiento por día <small>⚡ ${nMX(Math.round(pzTot / Math.max(1, hsTot)))} pzs por hora activa en el periodo</small></div>
+        ${dias.length > 1 ? `<div class="card">${graficaLinea(dias.map(d => ({ label: nomDia(d.fecha), v: d.pzs })), { valores: dias.length <= 10, alto: 180 })}</div>` : ""}
+        <div class="card tabla-dias">${dias.map(d => `<div class="item"><div class="desc" style="width:62px;color:var(--negro);font-weight:600">${nomDia(d.fecha)}</div>
+            <div class="desc" style="flex:1">${d.n} registro${d.n === 1 ? "" : "s"} · ${rangoH(d)} · ${act(d)} h activa${act(d) === 1 ? "" : "s"}<br>⚡ ${nMX(Math.round(d.pzs / Math.max(1, act(d))))} pzs/hora</div>
+            <div class="cant">${nMX(d.pzs)}</div></div>`).join("")}</div>`;
 }
 
 /* Suma de hoy por quien produjo, partida en Individual / Equipos (Fase 1) */
