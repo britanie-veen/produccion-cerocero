@@ -670,8 +670,8 @@ function famTabsHTML(){
 function familiaDe(sku){
     const f = prod(sku).familia; if (f) return f;
     const s = String(sku||"").replace(/^\[([^\]]+)\].*$/, "$1").toUpperCase();
-    if (/^VIN-/.test(s)) return "Pisos";
-    if (/^MUK-(TAPFOM|TAPTEC|YOG)/.test(s)) return "Tapetes";
+    if (/^VIN-(?!PISOPVC|RES)/.test(s)) return "Pisos";
+    if (/^MUK-(TAPFOM|TAPTEC|TAP3MM|YOG)/.test(s)) return "Tapetes";
     return "";
 }
 function lineasFiltradas(lineas){ const f = famFiltro(); return f ? (lineas || []).filter(l => familiaDe(l.sku) === f) : (lineas || []); }
@@ -1335,7 +1335,7 @@ async function guardar(){
     const cant = parseInt((document.getElementById("valor") || {}).value, 10);
     if (!cant || cant <= 0) { toast("Pon una cantidad válida"); return; }
     const nombre = ctx ? (ctx.nombre || prod(sku).desc) : prod(sku).desc;
-    const familia = ctx ? (/^VIN-/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "")) : ESTADO.reg.familia;
+    const familia = ctx ? (/^VIN-(?!PISOPVC|RES)/.test(sku.toUpperCase()) ? "Pisos" : (esPorHacer(sku) ? "Tapetes" : "")) : ESTADO.reg.familia;
     // Reparto: lo que faltaba va a la remisión/envío/machote; el sobrante, al colchón (20-oct)
     const faltan = faltanPara(ctx, sku);
     const extra = (faltan !== null && cant > faltan) ? cant - faltan : 0;
@@ -1597,10 +1597,11 @@ function vistaRemisionDetalle(){
 }
 
 /* --- DETALLE DE UN ENVÍO FULL: qué SKUs lleva --- */
-// "Por hacer" = se produce aquí: tapetes (MUK-TAPFOM/TAPTEC/YOG) y pisos/vinil (VIN-). El resto = terminado.
+// "Por hacer" = se produce aquí: tapetes (MUK-TAPFOM/TAPTEC/TAP3MM/YOG) y pisos/vinil (VIN-). El resto = terminado.
+// 26-oct (Bri): TAP3MM (tapete 3 mm) SÍ se produce; VIN-PISOPVC (piso adherible, viene en caja) y VIN-RES (Resistol) NO → terminados.
 function esPorHacer(sku){
     const s = String(sku||"").replace(/^\[([^\]]+)\].*$/, "$1").toUpperCase();   // por si llega como "[SKU] Nombre"
-    return /^VIN-/.test(s) || /^MUK-(TAPFOM|TAPTEC|YOG)/.test(s);
+    return /^VIN-(?!PISOPVC|RES)/.test(s) || /^MUK-(TAPFOM|TAPTEC|TAP3MM|YOG)/.test(s);
 }
 function verFull(envio){ ESTADO.fullSel = FULL.find(f => f.envio === envio) || null; ir('fullDetalle'); }
 // Registrar producción para un envío FULL (queda marcado origen=FULL + referencia del envío). N-04/N-05.
