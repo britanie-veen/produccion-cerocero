@@ -399,6 +399,20 @@ let STOCK = {};
 // Fotos de producto por SKU — de Odoo (SOLO CONSULTA). { sku: 'data:image/...' | '' (sin foto) }
 let FOTOS = {};
 let NOMBRES = {};   // sku -> nombre, de las líneas de remisiones/FULL que se han visto
+// 3-nov (Britanie): nombre REAL de cada SKU según Odoo (display_name sin el "[SKU]"). Manda sobre el nombre que traiga
+// REGISTRO_ENVIOS, la remisión o el machote, porque el archivo de envíos pone nombres genéricos por familia
+// ("Piso Tachon 1.60M" a un TEXGRI140-2M). Si Odoo no responde o el SKU no está, se queda el nombre de la fuente.
+let NOMBRES_ODOO = {};
+function nombreOdoo(sku, actual){ return NOMBRES_ODOO[sku] || actual || sku; }
+// Reescribe el nombre de cada línea ya cargada (FULL, remisiones de Colecta, machote) con el de Odoo. Es barata e idempotente:
+// se llama al terminar cada carga porque corren en paralelo y no se sabe cuál llega primero.
+function aplicarNombresOdoo(){
+    if (!Object.keys(NOMBRES_ODOO).length) return;
+    (FULL || []).forEach(f => (f.lineas || []).forEach(l => { l.nombre = nombreOdoo(l.sku, l.nombre); }));
+    (COLECTA || []).forEach(r => (r.lineas || []).forEach(l => { l.nombre = nombreOdoo(l.sku, l.nombre); }));
+    Object.keys((MACHOTE && MACHOTE.cortes) || {}).forEach(c => (MACHOTE.cortes[c] || []).forEach(it => { it.nombre = nombreOdoo(it.sku, it.nombre); }));
+    Object.keys(NOMBRES).forEach(k => { NOMBRES[k] = nombreOdoo(k, NOMBRES[k]); });
+}
 
 // Registros de producción del día (se van llenando al capturar). hora en texto.
 let REGISTROS = [];  // se llena de VERDAD desde el motor (lo producido HOY)
@@ -629,7 +643,7 @@ async function cargarMachote() {
     try {
         const r = await fetch(MOTOR_URL + "?action=machote");
         const j = await r.json();
-        if (j && j.ok) { MACHOTE = j; MACHOTE.esDeHoy = String(j.archivo || "").indexOf(fechaHoyArchivo()) >= 0; }
+        if (j && j.ok) { MACHOTE = j; MACHOTE.esDeHoy = String(j.archivo || "").indexOf(fechaHoyArchivo()) >= 0; aplicarNombresOdoo(); }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Leer los FULL pendientes (por fecha límite) del motor.
@@ -637,7 +651,7 @@ async function cargarFull() {
     try {
         const r = await fetch(MOTOR_URL + "?action=pendientesFull");
         const j = await r.json();
-        if (j && j.ok) FULL = j.envios || [];
+        if (j && j.ok) { FULL = j.envios || []; aplicarNombresOdoo(); }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Leer las remisiones de Colecta (Odoo) del motor.
@@ -645,7 +659,7 @@ async function cargarColecta() {
     try {
         const r = await fetch(MOTOR_URL + "?action=pendientesColecta");
         const j = await r.json();
-        if (j && j.ok) COLECTA = j.remisiones || [];
+        if (j && j.ok) { COLECTA = j.remisiones || []; aplicarNombresOdoo(); }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Leer el stock disponible por SKU (Odoo, solo consulta).
@@ -653,7 +667,7 @@ async function cargarStock() {
     try {
         const r = await fetch(MOTOR_URL + "?action=stock");
         const j = await r.json();
-        if (j && j.ok) STOCK = j.stock || {};
+        if (j && j.ok) { STOCK = j.stock || {}; if (j.nombres && Object.keys(j.nombres).length) { NOMBRES_ODOO = j.nombres; aplicarNombresOdoo(); } }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Texto del stock de un SKU ("40 pzs" o "—" si no lo hay).
