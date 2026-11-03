@@ -403,7 +403,7 @@ let NOMBRES = {};   // sku -> nombre, de las líneas de remisiones/FULL que se h
 // REGISTRO_ENVIOS, la remisión o el machote, porque el archivo de envíos pone nombres genéricos por familia
 // ("Piso Tachon 1.60M" a un TEXGRI140-2M). Si Odoo no responde o el SKU no está, se queda el nombre de la fuente.
 let NOMBRES_ODOO = {};
-function nombreOdoo(sku, actual){ return NOMBRES_ODOO[sku] || actual || sku; }
+function nombreOdoo(sku, actual){ return String(NOMBRES_ODOO[sku] || actual || sku).replace(/\s+/g, ' ').trim(); }   // Odoo manda "Jazz  (Negro, 1M)" con doble espacio
 // Reescribe el nombre de cada línea ya cargada (FULL, remisiones de Colecta, machote) con el de Odoo. Es barata e idempotente:
 // se llama al terminar cada carga porque corren en paralelo y no se sabe cuál llega primero.
 function aplicarNombresOdoo(){
