@@ -329,6 +329,22 @@
         .matriz .tot { font-weight:900; }
         .matriz .m { color:#c8c8c8; }
         .toca-card { cursor:pointer; }
+        /* 11-nov (v37): Panel del admin · secciones plegables */
+        .pleg { margin-top: 14px; }
+        .pleg-cab { display:flex; align-items:center; gap:10px; cursor:pointer; padding:10px 0; user-select:none; -webkit-user-select:none; }
+        .pleg-cab .seccion-titulo { flex:1; margin:0; }
+        .pleg-cab .pleg-dato { font-weight:900; font-size:calc(15px * var(--esc)); white-space:nowrap; }
+        .pleg-cab .pleg-flecha { width:26px; height:26px; border-radius:50%; border:1.5px solid var(--negro); display:flex; align-items:center; justify-content:center;
+            font-size:calc(13px * var(--esc)); transition: transform .18s; flex-shrink:0; }
+        .pleg.abierto .pleg-flecha { transform: rotate(90deg); background: var(--negro); color: var(--blanco); }
+        .pleg-cuerpo { display:none; padding-top:4px; }
+        .pleg.abierto .pleg-cuerpo { display:block; }
+        .fila-kpis.cuatro { grid-template-columns: 1fr 1fr; }
+        .fila-kpis.cuatro .kpi { padding: 14px 6px; }
+        .fila-kpis.cuatro .num { font-size:calc(34px * var(--esc)); }
+        .fila-kpis.cuatro .lbl { font-size:calc(12px * var(--esc)); }
+        .kpi .sub { font-weight:100; font-size:calc(12px * var(--esc)); color:var(--gris); margin-top:2px; }
+        .card.negra .sub { color:var(--blanco); opacity:.75; }
     </style>
 </head>
 
@@ -1828,6 +1844,27 @@ function tabbarAdmin(){
         <button onclick="ir('${t.v}')" class="${ESTADO.vista===t.v?'on':''}"><span class="ico">${t.ico}</span>${t.txt}</button>`).join("")}</nav>`;
 }
 
+/* 11-nov (v37, Britanie "sí dale"): Panel del administrador = resumen arriba (4 cifras) + secciones plegables.
+   Nada se quitó: cada bloque de antes es una sección que se abre al tocar y la app recuerda cómo la dejaste (localStorage). */
+const PANEL_PLEG_DEF = { hoy: true, completados: false, semanas: false, colchon: false, cierres: false, semana: false, machote: false, full: true };
+function panelPlegado(){ const g = lsGet("panelPleg") || {}; return Object.assign({}, PANEL_PLEG_DEF, g); }
+function togglePleg(k){
+    const el = document.getElementById("pleg-" + k); if (!el) return;
+    const ab = !el.classList.contains("abierto");
+    el.classList.toggle("abierto", ab);
+    const g = lsGet("panelPleg") || {}; g[k] = ab; lsSet("panelPleg", g);
+}
+function plegHTML(k, titulo, sub, dato, cuerpo){
+    const ab = panelPlegado()[k];
+    return `<div class="pleg ${ab ? "abierto" : ""}" id="pleg-${k}">
+        <div class="pleg-cab" onclick="togglePleg('${k}')">
+            <div class="seccion-titulo">${titulo}${sub ? `<small>${sub}</small>` : ""}</div>
+            ${dato !== undefined && dato !== null && dato !== "" ? `<div class="pleg-dato">${dato}</div>` : ""}
+            <div class="pleg-flecha">›</div>
+        </div>
+        <div class="pleg-cuerpo">${cuerpo}</div>
+    </div>`;
+}
 function vistaAdminPanel(){
     cargarRango28();                                   // 23-oct: 4 semanas + completados de hoy (se pide una vez cada 5 min)
     const skus = machoteSKUs("");
@@ -1841,28 +1878,21 @@ function vistaAdminPanel(){
     const colectaHoy = REGISTROS.filter(r=>r.origen!=='FULL' && r.origen!=='Colchón').reduce((a,r)=>a+r.cantidad,0);
     const fullHoy    = REGISTROS.filter(r=>r.origen==='FULL').reduce((a,r)=>a+r.cantidad,0);
     const colchonHoy = REGISTROS.filter(r=>r.origen==='Colchón').reduce((a,r)=>a+r.cantidad,0);
-    return header("Panel general", "Todos · hoy") + `<main>
-        ${avisoMachote()}
-        <div class="fila-kpis">
-            <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div></div>
-            <div class="card kpi"><div class="num">${personasHoy}</div><div class="lbl">personas activas hoy</div></div>
-        </div>
+    const fullPend = FULL.filter(f => Number(f.piezasPendientes) > 0);
+    const fullPzs = fullPend.reduce((a, f) => a + Number(f.piezasPendientes), 0);
+    const fullProx = fullPend.filter(f => f.entregaISO).sort((a, b) => a.entregaISO < b.entregaISO ? -1 : 1)[0];
+    const dHoy = RANGO28 && RANGO28.dias ? RANGO28.dias.find(x => x.fecha === fechaISOhoy()) : null;
+    const compHoy = dHoy ? dHoy.remCompletadas.length + dHoy.fullCompletados.length : null;
+
+    const secHoy = `
         <div class="card">
             <div class="item" style="padding:0"><div class="sku">Hoy por origen</div><div class="desc">Colecta · FULL · Colchón</div></div>
             <div class="item" style="border:none;padding-top:8px"><div class="desc">🧺 Colecta</div><div class="cant">${colectaHoy} pzs</div></div>
             <div class="item" style="border:none"><div class="desc">📦 FULL</div><div class="cant">${fullHoy} pzs</div></div>
             <div class="item" style="border:none"><div class="desc">🧱 Colchón</div><div class="cant">${colchonHoy} pzs</div></div>
         </div>
-        ${rendimientoHoraHTML(REGISTROS, "⏱ Hoy por hora", "piezas por hora del día · se actualiza solo")}
-        ${completadosHoyHTML()}
-        <div class="seccion-titulo" style="margin-top:20px">Últimas 4 semanas <small>¿la producción va subiendo o bajando?</small></div>
-        ${semanasHTML()}
-        <div class="seccion-titulo" style="margin-top:20px">🧱 Colchón del mes <small>Objetivo, lo que llevan, quién lo hizo hoy y los extras</small></div>
-        ${colchonTabHTML(true)}
-        <div class="seccion-titulo" style="margin-top:20px">Cierres por mes <small>¿Alcanzaron el 30% de colchón? y cuáles fueron los extras</small></div>
-        ${cierreMesHTML()}
-        ${SEMANA ? `
-        <div class="seccion-titulo" style="margin-top:20px">Producción de la semana <small>lunes a hoy</small></div>
+        ${rendimientoHoraHTML(REGISTROS, "⏱ Hoy por hora", "piezas por hora del día · se actualiza solo")}`;
+    const secSemana = SEMANA ? `
         <div class="card negra kpi"><div class="num">${SEMANA.total}</div><div class="lbl">piezas producidas esta semana (equipo)</div></div>
         <div class="card">
             <div class="sku" style="margin-bottom:6px">Por día</div>
@@ -1885,8 +1915,8 @@ function vistaAdminPanel(){
                 <div class="item" style="padding:6px 0">
                     <div><span class="desc">${i+1}.</span> ${p.persona}</div><div class="cant">${p.piezas}</div>
                 </div>`).join("") || `<p class="desc">Sin producción en equipo esta semana.</p>`}
-        </div>` : ``}
-        ` : ``}
+        </div>` : ``}` : `<p class="vacio">Cargando la semana…</p>`;
+    const secMachote = `
         <div class="card">
             <div class="item" style="padding:0"><div class="sku">Avance del machote de hoy</div><div class="cant">${pct}%</div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
@@ -1896,13 +1926,29 @@ function vistaAdminPanel(){
             <div class="item" style="padding:0"><div class="sku">Colecta (remisiones)</div><div class="cant">${remCompletas}/${rems.length}</div></div>
             <div class="prog"><span style="width:${Math.round(remCompletas/rems.length*100)}%"></span></div>
             <div class="desc" style="margin-top:8px">${remCompletas} completas de ${rems.length} que requieren producción</div>
-        </div>` : ``}
-        <div class="seccion-titulo" style="margin-top:20px">FULL por vencer</div>
-        ${FULL.length ? FULL.map(f=>`
+        </div>` : `<p class="vacio">Sin remisiones de colecta que requieran producción.</p>`}`;
+    const secFull = FULL.length ? FULL.map(f=>`
             <div class="card"><div class="item" style="padding:0">
                 <div><div class="sku">Envío ${f.envio}</div><div class="desc">${f.canal} · ${f.piezasPendientes} pzs</div></div>
                 <span class="chip ${f.entregaISO===fechaISOhoy()?'urgente':'full'}">${fechaBonita(f.entregaISO)}</span>
-            </div></div>`).join("") : `<p class="vacio">Sin FULL pendientes.</p>`}
+            </div></div>`).join("") : `<p class="vacio">Sin FULL pendientes.</p>`;
+
+    return header("Panel general", "Todos · hoy") + `<main>
+        ${avisoMachote()}
+        <div class="fila-kpis cuatro">
+            <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div><div class="sub">${personasHoy} persona${personasHoy === 1 ? "" : "s"} activa${personasHoy === 1 ? "" : "s"}</div></div>
+            <div class="card kpi"><div class="num">${pct}%</div><div class="lbl">del machote de hoy</div><div class="sub">${totalHecho} de ${totalMeta} pzs</div></div>
+            <div class="card kpi"><div class="num">${fullPend.length}</div><div class="lbl">FULL por hacer</div><div class="sub">${fullPend.length ? `${nMX(fullPzs)} pzs · próximo ${fullProx ? fechaBonita(fullProx.entregaISO) : "sin fecha"}` : "todo cubierto"}</div></div>
+            <div class="card kpi"><div class="num">${rems.length ? remCompletas + "/" + rems.length : "0"}</div><div class="lbl">remisiones de colecta</div><div class="sub">${rems.length ? "completas de las que llevan producción" : "sin pendientes"}</div></div>
+        </div>
+        ${plegHTML("hoy", "⏱ Hoy", "por origen y por hora", `${totalHoy()} pzs`, secHoy)}
+        ${plegHTML("completados", "✅ Completados hoy", "remisiones entregadas en Odoo y FULL terminados", compHoy === null ? "" : compHoy, completadosHoyHTML(true))}
+        ${plegHTML("semanas", "Últimas 4 semanas", "¿la producción va subiendo o bajando?", "", semanasHTML())}
+        ${plegHTML("colchon", "🧱 Colchón del mes", "objetivo, lo que llevan, quién lo hizo hoy y los extras", "", colchonTabHTML(true))}
+        ${plegHTML("cierres", "Cierres por mes", "¿alcanzaron el 30% de colchón? y cuáles fueron los extras", "", cierreMesHTML())}
+        ${plegHTML("semana", "Producción de la semana", "lunes a hoy · por día, individual y equipos", SEMANA ? `${nMX(SEMANA.total)} pzs` : "", secSemana)}
+        ${plegHTML("machote", "Machote y colecta", "avance del machote de hoy y remisiones", `${pct}%`, secMachote)}
+        ${plegHTML("full", "📦 FULL por vencer", "envíos con producción pendiente", FULL.length ? `${FULL.length}` : "", secFull)}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
 }
@@ -2018,11 +2064,11 @@ function graficaFamilias(dias){
 }
 const nMX = v => Number(v || 0).toLocaleString('es-MX');
 // Panel: completados HOY (FULL y remisiones) según las 4 semanas cargadas.
-function completadosHoyHTML(){
-    if (!RANGO28 || RANGO28.error || !RANGO28.dias) return "";
-    const d = RANGO28.dias.find(x => x.fecha === fechaISOhoy()); if (!d) return "";
+function completadosHoyHTML(sinTitulo){
+    if (!RANGO28 || RANGO28.error || !RANGO28.dias) return sinTitulo ? `<p class="vacio">Cargando…</p>` : "";
+    const d = RANGO28.dias.find(x => x.fecha === fechaISOhoy()); if (!d) return sinTitulo ? `<p class="vacio">Sin datos de hoy todavía.</p>` : "";
     const fila = (txt, sub) => `<div class="item" style="border:none;padding:6px 0"><div><div class="sku" style="font-size:calc(14px * var(--esc))">${txt}</div><div class="desc">${sub}</div></div></div>`;
-    return `<div class="seccion-titulo" style="margin-top:20px">✅ Completados hoy <small>remisiones entregadas en Odoo y envíos FULL con su producción terminada</small></div>
+    return (sinTitulo ? "" : `<div class="seccion-titulo" style="margin-top:20px">✅ Completados hoy <small>remisiones entregadas en Odoo y envíos FULL con su producción terminada</small></div>`) + `
         <div class="fila-kpis">
             <div class="card kpi"><div class="num">${d.remCompletadas.length}</div><div class="lbl">remisiones completadas<br>${d.remAtendidas} atendidas hoy</div></div>
             <div class="card kpi"><div class="num">${d.fullCompletados.length}</div><div class="lbl">envíos FULL completados<br>${d.fullAtendidos} atendidos hoy</div></div>
