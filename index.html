@@ -218,6 +218,7 @@
         }
         .chip.full { background: var(--negro); color: var(--blanco); }
         .chip.urgente { background: var(--negro); color: var(--blanco); }
+        .chip.pend-desde { background: var(--fondo); color: var(--negro); border: 1px solid var(--negro); font-weight: 700; margin-left: 6px; vertical-align: middle; }
         .chip.listo { background: #e3f6e9; color: #1e7a3c; border-color: #9fdcb3; }   /* 21-oct: envío FULL con la producción completa */
 
         /* Pestañas (cortes C1/C2/C3… los que traiga el machote) */
@@ -1390,7 +1391,9 @@ async function guardar(){
             await cargarResumen();
             toast(`✓ ${cant} pzs de stock ${ctx.origen === 'FULL' ? 'al envío' : 'a la remisión'}`);
         } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
-        ESTADO.reg.cantidad = 1; atras(); return;
+        ESTADO.reg.cantidad = 1;
+        if (remisionCubierta(ctx)) return;    // 11-nov (v38)
+        atras(); return;
     }
     try {
         if (cant - extra > 0) await enviarMotor(Object.assign({}, base, { cantidad: cant - extra,
@@ -1402,7 +1405,19 @@ async function guardar(){
         toast(extra ? (cant - extra > 0 ? `✓ ${cant - extra} ${a} · ${extra} al colchón` : `✓ ${extra} pzs al colchón (${a.replace('a la ', 'la ').replace('al ', 'el ')} ya estaba cubierto)`) : `✓ ${cant} pzs de ${nombre}`);
     } catch (e) { toast("No se pudo guardar. Revisa el internet."); }
     ESTADO.reg.cantidad = 1;
+    if (remisionCubierta(ctx)) return;        // 11-nov (v38): la remisión quedó cubierta → aviso y a Pendientes
     if (ctx) atras(); else ir("historial");   // desde una remisión/envío vuelve a esa pantalla
+}
+// 11-nov (v38): si lo que se acaba de registrar (producción o stock) cubrió TODAS las líneas de la remisión, avisa y regresa a
+// Pendientes, porque esa remisión ya no sale en la lista.
+function remisionCubierta(ctx){
+    if (!ctx || ctx.origen !== 'Colecta' || !ctx.ref) return false;
+    const r = remisionesConAvance().find(x => String(x.name) === String(ctx.ref));
+    if (!r || !r.completa) return false;
+    ESTADO.colectaVista = 'remision';
+    ir('pendientes');
+    setTimeout(() => toast(`✅ ${r.name} cubierta · baja de Pendientes`), 350);
+    return true;
 }
 
 /* --- PENDIENTES: Colecta (por corte) + FULL --- */
@@ -1544,11 +1559,15 @@ function machoteSet(){
     cortesLista().forEach(c => (MACHOTE.cortes[c]||[]).forEach(it => { s[it.sku] = true; }));
     return s;
 }
+/* 11-nov (v38, Britanie): una remisión pendiente en Odoo se queda en la lista aunque su SKU ya no venga en el machote de HOY
+   (antes se ocultaba al día siguiente si Sofi ya no lo cargaba). Sus líneas son lo que se produce aquí (tapetes y pisos) o lo
+   que esté en el machote; el avance cuenta otros días y lo tomado de stock. `deOtroDia` = pedida antes de hoy. */
 function remisionesConAvance(){
     const enMachote = machoteSet();
     const restante = {};                         // producido disponible por SKU (se gasta FIFO)
+    const hoyISO = fechaISOhoy();
     return COLECTA.map(r => {                     // COLECTA ya viene FIFO (más antigua primero)
-        const prod = (r.lineas||[]).filter(l => enMachote[l.sku]);
+        const prod = (r.lineas||[]).filter(l => enMachote[l.sku] || esPorHacer(l.sku));
         let done = 0;
         const lineas = prod.map(l => {
             if (restante[l.sku] === undefined) restante[l.sku] = producidoColectaDe(l.sku);   // solo Colecta: los extras no cubren remisiones
@@ -1560,7 +1579,8 @@ function remisionesConAvance(){
             if (listo) done++;
             return { sku:l.sku, nombre:l.nombre, qty:l.qty, hecho:hecho, listo:listo };
         });
-        return { name:r.name, canal:r.canal, lineas:lineas, done:done, total:prod.length,
+        return { name:r.name, canal:r.canal, fecha: r.fecha || '', deOtroDia: !!(r.fecha && r.fecha < hoyISO),
+                 lineas:lineas, done:done, total:prod.length,
                  otras:(r.lineas.length - prod.length), completa: prod.length>0 && done===prod.length };
     }).filter(r => r.total > 0);                 // solo remisiones que requieren producción
 }
@@ -1576,6 +1596,8 @@ function colectaPorRemision(){
     if (!COLECTA.length) return `<p class="vacio">No hay remisiones de Colecta pendientes ahora.</p>`;
     let rems = remisionesConAvance();
     if (!rems.length) return `<p class="vacio">Ninguna remisión pendiente requiere producción (todo es de stock).</p>`;
+    rems = rems.filter(r => !r.completa);        // 11-nov (v38): la cubierta baja de Pendientes (Britanie: "si ya están cubiertas, quítala")
+    if (!rems.length) return `<p class="vacio">✅ Todas las remisiones pendientes ya tienen su producción cubierta.</p>`;
     if (famFiltro()) {                                               // solo lo de la familia elegida (Ricardo)
         rems = rems.map(r => { const ls = lineasFiltradas(r.lineas); const d = ls.filter(l => l.listo).length;
                                return Object.assign({}, r, { lineas: ls, done: d, total: ls.length, completa: ls.length > 0 && d === ls.length }); })
@@ -1587,7 +1609,7 @@ function colectaPorRemision(){
         const b = r.completa;
         return `<div class="card ${b?'negra':''}" style="cursor:pointer" onclick="verRemision('${r.name}')">
             <div class="item" style="padding:0">
-                <div><div class="sku" ${b?'style="color:#fff"':''}>${b?'✅ ':''}${r.name}</div>
+                <div><div class="sku" ${b?'style="color:#fff"':''}>${b?'✅ ':''}${r.name}${r.deOtroDia ? ` <span class="chip pend-desde">pendiente desde ${fechaBonita(r.fecha)}</span>` : ''}</div>
                      <div class="desc" ${b?'style="color:rgba(255,255,255,.7)"':''}>${r.canal}</div></div>
                 <div class="cant" style="font-size:calc(14px * var(--esc))${b?';color:#fff':''}">${r.done}/${r.total} SKUs${famFiltro() ? ' de ' + famFiltro().toLowerCase() : ''} ›</div>
             </div>
@@ -1874,6 +1896,7 @@ function vistaAdminPanel(){
     const personasHoy = new Set(REGISTROS.map(r=>r.persona)).size;
     const rems = remisionesConAvance();
     const remCompletas = rems.filter(r=>r.completa).length;
+    const remPend = rems.filter(r=>!r.completa), remViejas = remPend.filter(r=>r.deOtroDia).length;   // 11-nov (v38)
     const maxDia = SEMANA ? Math.max(1, ...SEMANA.porDia.map(x=>x.piezas)) : 1;
     const colectaHoy = REGISTROS.filter(r=>r.origen!=='FULL' && r.origen!=='Colchón').reduce((a,r)=>a+r.cantidad,0);
     const fullHoy    = REGISTROS.filter(r=>r.origen==='FULL').reduce((a,r)=>a+r.cantidad,0);
@@ -1925,7 +1948,7 @@ function vistaAdminPanel(){
         ${rems.length ? `<div class="card">
             <div class="item" style="padding:0"><div class="sku">Colecta (remisiones)</div><div class="cant">${remCompletas}/${rems.length}</div></div>
             <div class="prog"><span style="width:${Math.round(remCompletas/rems.length*100)}%"></span></div>
-            <div class="desc" style="margin-top:8px">${remCompletas} completas de ${rems.length} que requieren producción</div>
+            <div class="desc" style="margin-top:8px">${remCompletas} cubiertas de ${rems.length} que requieren producción${remViejas ? ` · ${remViejas} pendiente${remViejas === 1 ? "" : "s"} de días anteriores` : ""}</div>
         </div>` : `<p class="vacio">Sin remisiones de colecta que requieran producción.</p>`}`;
     const secFull = FULL.length ? FULL.map(f=>`
             <div class="card"><div class="item" style="padding:0">
@@ -1939,7 +1962,7 @@ function vistaAdminPanel(){
             <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div><div class="sub">${personasHoy} persona${personasHoy === 1 ? "" : "s"} activa${personasHoy === 1 ? "" : "s"}</div></div>
             <div class="card kpi"><div class="num">${pct}%</div><div class="lbl">del machote de hoy</div><div class="sub">${totalHecho} de ${totalMeta} pzs</div></div>
             <div class="card kpi"><div class="num">${fullPend.length}</div><div class="lbl">FULL por hacer</div><div class="sub">${fullPend.length ? `${nMX(fullPzs)} pzs · próximo ${fullProx ? fechaBonita(fullProx.entregaISO) : "sin fecha"}` : "todo cubierto"}</div></div>
-            <div class="card kpi"><div class="num">${rems.length ? remCompletas + "/" + rems.length : "0"}</div><div class="lbl">remisiones de colecta</div><div class="sub">${rems.length ? "completas de las que llevan producción" : "sin pendientes"}</div></div>
+            <div class="card kpi"><div class="num">${remPend.length}</div><div class="lbl">remisiones por cubrir</div><div class="sub">${remPend.length ? (remViejas ? `${remViejas} de días anteriores` : "todas de hoy") : "todo cubierto"}</div></div>
         </div>
         ${plegHTML("hoy", "⏱ Hoy", "por origen y por hora", `${totalHoy()} pzs`, secHoy)}
         ${plegHTML("completados", "✅ Completados hoy", "remisiones entregadas en Odoo y FULL terminados", compHoy === null ? "" : compHoy, completadosHoyHTML(true))}
