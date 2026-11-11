@@ -504,6 +504,39 @@ const deStockTxt = (sku, ref) => { const e = deStockDe(sku, ref); return e ? ` �
 const stockHoy = () => REGISTROS_REF.filter(r => r.origen === 'Stock' && r.fecha === fechaISOhoy());
 const extrasTxt = (sku, ref) => { const e = extrasDe(sku, ref); return e ? ` · 🧱 ${e} extra al colchón` : ``; };   // 20-oct: aviso en las listas de FULL y remisión
 const producidoDe = sku => REGISTROS.filter(r => r.sku === sku && ((r.origen || 'Colecta') === 'Colecta' || esExtraDe(r, 'Machote'))).reduce((a, r) => a + r.cantidad, 0);
+/* 11-nov (v39, Britanie): cada registro guarda su CORTE. Sofi repite el mismo SKU en C1, C2 y C3 con piezas distintas, y antes
+   la vista Por SKU comparaba TODO lo del día contra la meta del corte: lo hecho en C1 aparecía "hecho" también en C2.
+   Sin pasos extra para el operador: desde Por SKU el corte es la pestaña en la que está; desde una remisión o un envío, el corte
+   que toca por la hora según los horarios del machote. */
+function minutosDe(h){ const m = String(h || '').match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
+function corteActual(d){
+    d = d || new Date(); const ahora = d.getHours() * 60 + d.getMinutes(), cs = cortesLista();
+    for (const c of cs) {                                        // primer corte cuya hora de fin aún no pasa
+        const h = String((MACHOTE.horarios || {})[c] || '').split('-');
+        const fin = h.length > 1 ? minutosDe(h[1]) : null;
+        if (fin !== null && ahora <= fin) return c;
+    }
+    if (cs.some(c => (MACHOTE.horarios || {})[c])) return cs[cs.length - 1];
+    return ahora <= 9 * 60 ? 'C1' : (ahora <= 12 * 60 ? 'C2' : 'C3');   // sin horarios en el machote: los fijos
+}
+// Producido HOY de un SKU repartido por corte: { C1: n, C2: n, … }. El registro con corte va a SU corte; lo que sobre de la
+// meta de ese corte pasa al siguiente con hueco (la pieza existe y cubre el día). Los registros viejos sin corte se reparten
+// por orden (C1 primero). Si ya no hay hueco en ningún corte, se queda donde se registró (se ve 5/2).
+function hechoPorCorte(sku){
+    const cs = cortesLista(), meta = {}, hecho = {};
+    cs.forEach(c => { const it = (MACHOTE.cortes[c] || []).find(x => x.sku === sku); meta[c] = it ? Number(it.meta) || 0 : 0; hecho[c] = 0; });
+    const regs = REGISTROS.filter(r => r.sku === sku && ((r.origen || 'Colecta') === 'Colecta' || esExtraDe(r, 'Machote')))
+                          .slice().sort((a, b) => String(a.hora || '').localeCompare(String(b.hora || '')));
+    regs.forEach(r => {
+        let resta = Number(r.cantidad) || 0;
+        const propio = cs.includes(r.corte) ? r.corte : null;
+        const orden = propio ? cs.slice(cs.indexOf(propio)) : cs;            // su corte y los que siguen (o todos, en orden)
+        for (const c of orden) { if (resta <= 0) break; const hueco = Math.max(0, meta[c] - hecho[c]); const pon = Math.min(hueco, resta); hecho[c] += pon; resta -= pon; }
+        if (resta > 0) hecho[propio || cs.filter(c => meta[c] > 0).pop() || cs[cs.length - 1]] += resta;   // sin hueco: se queda en el suyo
+    });
+    return hecho;
+}
+const hechoEnCorte = (sku, c) => hechoPorCorte(sku)[c] || 0;
 const producidoColectaDe = sku => REGISTROS.filter(r => r.sku === sku && (r.origen || 'Colecta') === 'Colecta').reduce((a, r) => a + r.cantidad, 0);
 const totalHoy = () => REGISTROS.reduce((a, r) => a + r.cantidad, 0);
 
@@ -574,7 +607,8 @@ async function cargarResumen() {
                 familia: x.familia, cantidad: Number(x.cantidad), hora: x.hora,
                 origen: x.origen || 'Colecta', ref: String(x.ref || ''),   // 20-oct: el Sheet convierte "79774703" a número; como texto sí empata con el envío FULL
                 tipo: x.tipo || (String(x.persona).indexOf('Equipo:') === 0 ? 'Equipo' : 'Individual'),
-                integrantes: x.integrantes || ''
+                integrantes: x.integrantes || '',
+                corte: String(x.corte || '')                               // 11-nov (v39): corte al que pertenece (vacío = registro viejo)
             });
             REGISTROS = (j.registrosHoy || []).map(mapReg);
             // 23-oct: con referencia, de varios días. Si el motor aún es el viejo (sin registrosRef), se usa lo de hoy con referencia.
@@ -1383,7 +1417,8 @@ async function guardar(){
     const extra = (faltan !== null && cant > faltan) ? cant - faltan : 0;
     const base = { action: "registrar", persona: ESTADO.usuario.nombre, sku: sku, desc: nombre, familia: familia,
                    tipo: esEquipo() ? "Equipo" : "Individual",            // Fase 1: producción por equipo o individual
-                   integrantes: esEquipo() ? ESTADO.usuario.integrantes.join(", ") : "" };
+                   integrantes: esEquipo() ? ESTADO.usuario.integrantes.join(", ") : "",
+                   corte: ctx ? corteActual() : ESTADO.corte };            // 11-nov (v39): Por SKU = la pestaña; remisión/envío = por la hora
     toast("Guardando…");
     if (ctx && ctx.stock) {                                                    // 23-oct: 📦 tomadas de stock: no es producción, todo va a la referencia
         try {
@@ -1469,15 +1504,16 @@ function vistaPendientes(){
 /* Colecta — vista POR SKU (el machote por corte) */
 function colectaPorSKU(){
     const items = MACHOTE.cortes[ESTADO.corte] || [];
-    // Prioridad: primero el que tiene MÁS piezas por producir (meta − lo ya hecho). N-06.
-    const porFaltante = (a,b) => (b.meta - producidoDe(b.sku)) - (a.meta - producidoDe(a.sku));
+    // 11-nov (v39): lo hecho se cuenta POR CORTE (lo de C1 no aparece hecho en C2). Prioridad: más piezas por producir primero. N-06.
+    const hechoC = sku => hechoEnCorte(sku, ESTADO.corte);
+    const porFaltante = (a,b) => (b.meta - hechoC(b.sku)) - (a.meta - hechoC(a.sku));
     const tapetes = items.filter(m => m.familia === 'Tapetes').sort(porFaltante);
     const pisos   = items.filter(m => m.familia === 'Pisos').sort(porFaltante);
     const bloque = arr => arr.map(m => {
-        const hecho = producidoDe(m.sku);
+        const hecho = hechoC(m.sku), listo = hecho >= m.meta;
         const pct = Math.min(100, Math.round(hecho / m.meta * 100));
-        return `<div class="card" style="cursor:pointer" onclick="verSku('${m.sku}')">
-            <div class="item"><div><div class="sku">${m.nombre}</div><div class="desc">${m.sku} · Stock ${stockTxt(m.sku)}${extrasTxt(m.sku, 'Machote')}</div></div>
+        return `<div class="card" style="cursor:pointer${listo ? ';border-color:#9fdcb3' : ''}" onclick="verSku('${m.sku}')">
+            <div class="item"><div><div class="sku">${listo ? '<span style="color:#1e7a3c">✔</span> ' : ''}${m.nombre}</div><div class="desc">${m.sku} · Stock ${stockTxt(m.sku)}${extrasTxt(m.sku, 'Machote')}</div></div>
                 <div class="cant">${hecho}/${m.meta} <span style="color:var(--gris)">›</span></div></div>
             <div class="prog"><span style="width:${pct}%"></span></div>
         </div>`;
@@ -1534,9 +1570,12 @@ function vistaSkuDetalle(){
     const info = machoteSKUs("").find(x => x.sku === sku) || { sku: sku, nombre: NOMBRES[sku] || prod(sku).desc, familia: prod(sku).familia, meta: 0 };
     const hecho = producidoDe(sku);
     const pct = info.meta ? Math.min(100, Math.round(hecho / info.meta * 100)) : 0;
+    const hpc = hechoPorCorte(sku);                                       // 11-nov (v39): hecho / meta de cada corte
     const porCorte = cortesLista().map(c => {
         const it = (MACHOTE.cortes[c] || []).find(x => x.sku === sku);
-        return it ? `<div class="item"><div class="desc">Corte ${c} (${horarioDe(c)})</div><div class="cant" style="font-size:calc(14px * var(--esc))">${it.meta} pzs</div></div>` : "";
+        if (!it) return "";
+        const h = hpc[c] || 0, listo = h >= it.meta;
+        return `<div class="item"><div class="desc">Corte ${c} (${horarioDe(c)})</div><div class="cant" style="font-size:calc(14px * var(--esc));${listo ? 'color:#1e7a3c' : ''}">${h}/${it.meta} pzs${listo ? ' ✔' : ''}</div></div>`;
     }).join("");
     return header(info.nombre, sku) + `<main>
         <div class="foto-wrap grande"><img data-foto="${sku}" alt="${info.nombre}"></div>
