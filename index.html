@@ -218,6 +218,12 @@
         }
         .chip.full { background: var(--negro); color: var(--blanco); }
         .chip.urgente { background: var(--negro); color: var(--blanco); }
+        .card.alertas { border: 2px solid var(--negro); }
+        .card.alertas.ok { border-color: #9fdcb3; background: #e3f6e9; color: #1e7a3c; font-weight: 700; }
+        .alerta { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid #eee; font-size: calc(14px * var(--esc)); line-height: 1.35; }
+        .alerta:first-of-type { border-top: none; }
+        .alerta .ico { font-size: calc(18px * var(--esc)); flex: none; }
+        .alerta.rojo { color: #b3261e; font-weight: 700; }
         .chip.pend-desde { background: var(--fondo); color: var(--negro); border: 1px solid var(--negro); font-weight: 700; margin-left: 6px; vertical-align: middle; }
         .chip.listo { background: #e3f6e9; color: #1e7a3c; border-color: #9fdcb3; }   /* 21-oct: envío FULL con la producción completa */
 
@@ -1926,6 +1932,59 @@ function plegHTML(k, titulo, sub, dato, cuerpo){
         <div class="pleg-cuerpo">${cuerpo}</div>
     </div>`;
 }
+/* 11-nov (v40, Britanie, punto 2 del plan de admin): TARJETA DE ALERTAS al inicio del Panel. Lo que antes había que deducir
+   leyendo todo: (1) envíos FULL con entrega hoy, mañana o ya vencida y producción incompleta; (2) ritmo del día abajo de la meta
+   (contra la hora de la jornada del machote); (3) operadores sin ningún registro hoy (desde hora y media después de empezar);
+   (4) remisiones de días anteriores sin cubrir. Si no hay nada, una tarjeta verde. Solo lectura: no cambia ningún dato. */
+function jornadaDe(){
+    const cs = cortesLista(), h = MACHOTE.horarios || {};
+    const ini = minutosDe(String(h[cs[0]] || '').split('-')[0]), fin = minutosDe(String(h[cs[cs.length - 1]] || '').split('-')[1]);
+    return { ini: ini === null ? 8 * 60 : ini, fin: fin === null ? 17 * 60 : fin };
+}
+function alertasPanel(d){
+    d = d || new Date(); const ahora = d.getHours() * 60 + d.getMinutes(), hoy = fechaISOhoy();
+    const man = new Date(d); man.setDate(man.getDate() + 1); const p2 = n => String(n).padStart(2, '0');
+    const manISO = man.getFullYear() + "-" + p2(man.getMonth() + 1) + "-" + p2(man.getDate());
+    const al = [];
+    // (1) FULL que vence hoy o mañana (o ya venció) con producción incompleta
+    FULL.filter(f => f.entregaISO && f.entregaISO <= manISO && !fullCompleto(f))
+        .sort((a, b) => a.entregaISO < b.entregaISO ? -1 : 1)
+        .forEach(f => {
+            const ph = (f.lineas || []).filter(l => esPorHacer(l.sku));
+            const ped = ph.reduce((a, l) => a + (Number(l.piezas) || 0), 0);
+            const hecho = ph.reduce((a, l) => a + Math.min(hechoFullDe(f.envio, l.sku), Number(l.piezas) || 0), 0);
+            const cuando = f.entregaISO < hoy ? 'VENCIDA (' + fechaBonita(f.entregaISO) + ')' : fechaBonita(f.entregaISO);
+            al.push({ nivel: 'rojo', ico: '📦', txt: `Envío ${f.envio} (${f.canal}) · entrega ${cuando} · producción ${hecho}/${ped} pzs` });
+        });
+    // (2) ritmo del día contra la hora de la jornada
+    const skus = machoteSKUs(""), totalMeta = skus.reduce((a, m) => a + m.meta, 0);
+    const totalHecho = skus.reduce((a, m) => a + Math.min(producidoDe(m.sku), m.meta), 0);
+    const pct = totalMeta ? Math.round(totalHecho / totalMeta * 100) : 0;
+    const j = jornadaDe();
+    if (totalMeta && ahora > j.ini && ahora < j.fin) {
+        const esperado = Math.round((ahora - j.ini) / (j.fin - j.ini) * 100);
+        if (pct < esperado - 15) al.push({ nivel: 'amar', ico: '⏱', txt: `Ritmo abajo de la meta: van ${pct}% del machote y a esta hora deberían ir en ${esperado}% (${totalHecho} de ${totalMeta} pzs)` });
+    }
+    // (3) operadores sin registro hoy (desde hora y media después de empezar la jornada)
+    if (ahora >= j.ini + 90) {
+        const con = new Set();
+        REGISTROS.forEach(r => { con.add(r.persona); if (esRegEquipo(r)) integrantesDe(r).forEach(n => con.add(n)); });
+        const sin = PERSONAS.filter(p => p.rol !== 'admin' && !con.has(p.nombre)).map(p => p.nombre);
+        if (sin.length) al.push({ nivel: 'amar', ico: '👤', txt: `${sin.length} sin registro hoy: ${sin.join(', ')}` });
+    }
+    // (4) remisiones de días anteriores sin cubrir
+    const viejas = remisionesConAvance().filter(r => !r.completa && r.deOtroDia);
+    if (viejas.length) al.push({ nivel: 'amar', ico: '🧺', txt: `${viejas.length} ${viejas.length === 1 ? 'remisión' : 'remisiones'} de días anteriores sin cubrir: ${viejas.map(r => `${r.name} (${fechaBonita(r.fecha)}, ${r.done}/${r.total})`).join(' · ')}` });
+    return al;
+}
+function alertasHTML(){
+    const al = alertasPanel();
+    if (!al.length) return `<div class="card alertas ok">✅ Sin alertas por ahora</div>`;
+    return `<div class="card alertas">
+        <div class="item" style="padding:0 0 6px"><div class="sku">⚠️ Alertas</div><div class="cant">${al.length}</div></div>
+        ${al.map(a => `<div class="alerta ${a.nivel}"><span class="ico">${a.ico}</span><span>${a.txt}</span></div>`).join('')}
+    </div>`;
+}
 function vistaAdminPanel(){
     cargarRango28();                                   // 23-oct: 4 semanas + completados de hoy (se pide una vez cada 5 min)
     const skus = machoteSKUs("");
@@ -1997,6 +2056,7 @@ function vistaAdminPanel(){
 
     return header("Panel general", "Todos · hoy") + `<main>
         ${avisoMachote()}
+        ${alertasHTML()}
         <div class="fila-kpis cuatro">
             <div class="card negra kpi"><div class="num">${totalHoy()}</div><div class="lbl">piezas hoy</div><div class="sub">${personasHoy} persona${personasHoy === 1 ? "" : "s"} activa${personasHoy === 1 ? "" : "s"}</div></div>
             <div class="card kpi"><div class="num">${pct}%</div><div class="lbl">del machote de hoy</div><div class="sub">${totalHecho} de ${totalMeta} pzs</div></div>
