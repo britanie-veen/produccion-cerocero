@@ -839,7 +839,7 @@ function registrarColchon(sku){
 }
 function origenTxt(r){
     if (r.origen === 'FULL')    return '📦 FULL' + (r.ref ? ' ' + r.ref : '');
-    if (r.origen === 'Colchón') return '🧱 Colchón' + (r.ref ? ' (extra de ' + (String(r.ref) === 'Machote' ? 'la meta del día' : r.ref) + ')' : '');
+    if (r.origen === 'Colchón') return '🧱 Colchón' + (r.ref ? (String(r.ref) === 'Sin pedido' ? ' (sin pedido)' : ' (extra de ' + (String(r.ref) === 'Machote' ? 'la meta del día' : r.ref) + ')') : '');   // 13-nov (v41): 'Sin pedido' = Otro SKU
     if (r.origen === 'Stock')   return '📦 De stock' + (r.ref ? ' para ' + r.ref : '');   // 23-oct: no es producción
     return '🧺 Colecta' + (r.ref ? ' ' + r.ref : '');
 }
@@ -1337,7 +1337,10 @@ function vistaRegistroContexto() {
         <div class="card" style="padding:12px 16px"><div class="sku">${ctx.nombre || prod(sku).desc}</div><div class="desc">${sku}</div></div>
         <div class="foto-wrap"><img data-foto="${sku}" alt=""></div>
         <div class="card">
-            ${ctx.origen === 'Colchón'
+            ${ctx.libre
+                ? `<div class="item" style="padding:0"><div class="desc">Producido hoy sin pedido (este SKU)</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho} pzs</div></div>
+                   <div class="item" style="border:none;padding-top:8px"><div class="desc">No está en el machote de hoy ni en una remisión o envío. Se guarda como 🧱 <b>colchón (sin pedido)</b> y suma al colchón del mes. Si después llega un pedido con este SKU, cúbrelo desde la remisión con 📦 Tomar de stock.</div></div>`
+                : ctx.origen === 'Colchón'
                 ? `<div class="item" style="padding:0"><div class="desc">Producido hoy para el colchón (este SKU)</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho} pzs</div></div>
                    <div class="item" style="border:none;padding-top:8px"><div class="desc">${ctx.sugerido ? 'Sugerido para el colchón: <b>' + ctx.sugerido + ' pzs</b> · ' : ''}Pedido en ${ctx.remisiones || 0} remisiones (últimos ${(TOPREM && TOPREM.dias) || 30} días)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${MES ? 'faltan ' + MES.colchonPendiente + ' del mes' : ''}</div></div>`
                 : `<div class="item" style="padding:0"><div class="desc">Meta de ${ctx.origen === 'FULL' ? 'este envío' : 'esta remisión'} para este SKU</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${meta} pzs</div></div>
@@ -1363,6 +1366,8 @@ function vistaProducir() {
         return header("Registrar", "¿Qué produjiste?") + `<main>
             <div class="seccion-titulo">Familia</div>${tabsFam}
             <p class="vacio">No hay ${ESTADO.reg.familia.toLowerCase()} en el machote de hoy.</p>
+            <button class="btn blanco" onclick="ir('buscarSku')"><span class="ico">🔍</span> Buscar otro SKU <span class="flecha">→</span></button>
+            <p class="vacio" style="padding:0 0 10px;text-align:left">Cualquier tapete o piso de Odoo, aunque no esté en el machote. Se guarda como 🧱 colchón (sin pedido).</p>
             <div class="link" onclick="ir('home')">Volver</div>
         </main>` + tabbar();
     }
@@ -1376,6 +1381,7 @@ function vistaProducir() {
         <select onchange="ESTADO.reg.sku=this.value;render()">
             ${lista.map(p => `<option value="${p.sku}" ${p.sku===ESTADO.reg.sku?'selected':''}>${p.nombre} · ${p.sku}</option>`).join("")}
         </select>
+        <div class="link" style="margin:-4px 0 10px;text-align:left" onclick="ir('buscarSku')">🔍 ¿No está en la lista? Busca el SKU</div>
         <div class="foto-wrap"><img data-foto="${sel.sku}" alt="${sel.nombre}"></div>
         <div class="card">
             <div class="item" style="padding:0"><div class="desc">Meta de hoy para este SKU</div><div class="cant" style="font-size:calc(18px * var(--esc))">${hecho}/${sel.meta} pzs</div></div>
@@ -1390,6 +1396,57 @@ function vistaProducir() {
     </main>` + tabbar();
 }
 function setFamilia(f){ ESTADO.reg.familia=f; ESTADO.reg.sku=null; render(); }
+/* 13-nov (v41, Britanie): "OTRO SKU". Por SKU solo trae lo del machote de Sofi; Por remisión lo de Odoo; FULL lo de REGISTRO_ENVIOS.
+   Si un SKU no venía en ninguno (el tapete uva), no había forma de registrarlo. Aquí se busca entre TODOS los tapetes y pisos de
+   Odoo (STOCK + NOMBRES_ODOO ya cargados en cada vuelta; se filtra con esPorHacer) y se registra como Colchón con referencia
+   "Sin pedido": suma al colchón del mes y NO cubre remisiones (regla de siempre: los extras no cubren pedidos; para eso está
+   📦 Tomar de stock dentro de la remisión o del envío). */
+function skusOdoo(familia){
+    const vistos = {};
+    Object.keys(NOMBRES_ODOO).concat(Object.keys(STOCK)).forEach(s => { vistos[s] = true; });
+    return Object.keys(vistos).filter(esPorHacer).map(s => ({ sku: s, nombre: nombreOdoo(s, NOMBRES[s] || s), familia: familiaDe(s) }))
+        .filter(x => !familia || x.familia === familia)
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.sku.localeCompare(b.sku));
+}
+function vistaBuscarSku(){
+    const q = String(ESTADO.buscaSku || "").trim().toLowerCase();
+    const fam = ESTADO.reg.familia || "Tapetes";
+    const todos = skusOdoo(fam);
+    const lista = q ? todos.filter(x => x.sku.toLowerCase().includes(q) || x.nombre.toLowerCase().includes(q)) : todos;
+    const enMachote = machoteSet();
+    const tabsFam = `<div class="tabs">
+            <button class="${fam==='Tapetes'?'on':''}" onclick="setFamilia('Tapetes')">Tapetes</button>
+            <button class="${fam==='Pisos'?'on':''}" onclick="setFamilia('Pisos')">Pisos</button>
+        </div>`;
+    const filas = lista.slice(0, 80).map(x => `
+        <div class="persona" onclick="elegirSkuLibre('${x.sku}')">
+            <div class="nom"><div class="n">${escHTML(x.nombre)}</div><div class="d">${x.sku}${enMachote[x.sku] ? ' · en el machote de hoy' : ''}</div></div>
+            <span class="meta"><b>${stockTxt(x.sku)}</b>en Odoo</span>
+        </div>`).join("");
+    return header("Buscar SKU", "Cualquier tapete o piso de Odoo") + `<main>
+        <div class="seccion-titulo">Familia</div>${tabsFam}
+        <input id="buscaSku" class="selbox" placeholder="🔍  Escribe el SKU o el nombre (uva, 8mm, 1.40…)" value="${escHTML(ESTADO.buscaSku || "")}"
+               oninput="ESTADO.buscaSku=this.value;pintarBusquedaSku()" autocomplete="off">
+        <div class="aviso"><b>🧱 Se guarda como colchón (sin pedido)</b><span>Úsalo cuando el SKU no está en el machote de hoy ni en una remisión o envío FULL. Si después llega un pedido con este SKU, se cubre desde la remisión con 📦 Tomar de stock.</span></div>
+        <div class="seccion-titulo" id="tituloSkus">${lista.length ? `${lista.length} SKU${lista.length === 1 ? '' : 's'}` : 'Sin resultados'} <small>${lista.length > 80 ? 'se muestran 80 · escribe para afinar' : (todos.length ? 'toca uno para registrar' : 'Odoo aún no responde · toca ↻')}</small></div>
+        <div id="listaSkus">${filas || `<p class="vacio">${todos.length ? 'Ningún SKU coincide con "' + escHTML(ESTADO.buscaSku) + '".' : 'Todavía no llega la lista de Odoo. Espera un momento o toca ↻ arriba.'}</p>`}</div>
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbar();
+}
+// Repinta solo la lista al escribir (sin perder el foco del teclado de la tablet)
+function pintarBusquedaSku(){
+    const html = vistaBuscarSku();
+    const m = html.match(/<div id="listaSkus">([\s\S]*?)<\/div>\s*<div class="sello">/);
+    const el = document.getElementById("listaSkus");
+    if (el && m) { el.innerHTML = m[1]; hidratarFotos(); }
+    const tit = document.getElementById("tituloSkus");
+    const t2 = html.match(/<div class="seccion-titulo" id="tituloSkus">([\s\S]*?)<\/div>\s*<div id="listaSkus">/);
+    if (tit && t2) tit.innerHTML = t2[1];
+}
+function elegirSkuLibre(sku){
+    const nombre = nombreOdoo(sku, NOMBRES[sku] || prod(sku).desc);
+    registrarEn({ origen: "Colchón", ref: "Sin pedido", etiqueta: "Fuera del machote · sin pedido", meta: 0, nombre: nombre, libre: true }, sku);
+}
 function cantEscrita(v){ const n = parseInt(v, 10); if (n > 0) ESTADO.reg.cantidad = n; }
 function paso(d){ const el = document.getElementById("valor"); const n = parseInt(el.value, 10) || ESTADO.reg.cantidad;
     ESTADO.reg.cantidad = Math.max(1, n + d); el.value = ESTADO.reg.cantidad; }
@@ -1913,7 +1970,7 @@ function tabbarAdmin(){
 
 /* 11-nov (v37, Britanie "sí dale"): Panel del administrador = resumen arriba (4 cifras) + secciones plegables.
    Nada se quitó: cada bloque de antes es una sección que se abre al tocar y la app recuerda cómo la dejaste (localStorage). */
-const PANEL_PLEG_DEF = { hoy: true, completados: false, semanas: false, colchon: false, cierres: false, semana: false, machote: false, full: true };
+const PANEL_PLEG_DEF = { hoy: true, completados: false, semanas: false, colchon: false, cierres: false, semana: false, machote: false, full: true, personas: false };
 function panelPlegado(){ const g = lsGet("panelPleg") || {}; return Object.assign({}, PANEL_PLEG_DEF, g); }
 function togglePleg(k){
     const el = document.getElementById("pleg-" + k); if (!el) return;
@@ -2071,8 +2128,54 @@ function vistaAdminPanel(){
         ${plegHTML("semana", "Producción de la semana", "lunes a hoy · por día, individual y equipos", SEMANA ? `${nMX(SEMANA.total)} pzs` : "", secSemana)}
         ${plegHTML("machote", "Machote y colecta", "avance del machote de hoy y remisiones", `${pct}%`, secMachote)}
         ${plegHTML("full", "📦 FULL por vencer", "envíos con producción pendiente", FULL.length ? `${FULL.length}` : "", secFull)}
+        ${plegHTML("personas", "👤 Personas", "quién puede entrar a la app", `${PERSONAS.length}`, personasPanelHTML())}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </main>` + tabbarAdmin();
+}
+/* 13-nov (v41, Britanie): ALTA DE PERSONAS DESDE LA APP. Antes, agregar a alguien era una fila nueva en la pestaña Personas
+   del Sheet (cuenta de Britanie). Ahora el administrador lo hace desde el Panel: nombre → el motor (acción agregarPersona)
+   escribe la fila en esa misma pestaña; la lista se recarga y el nombre sale en "¿Quién eres?" en todas las tablets.
+   Entra como operador; los administradores siguen fijos en ADMINS (código). Bajas y cambios de nombre: siguen en el Sheet. */
+function personasPanelHTML(){
+    const ops = PERSONAS.filter(p => p.rol !== "admin").length, adm = PERSONAS.length - ops;
+    return `<div class="card">
+        <div class="item" style="padding:0"><div class="sku">${PERSONAS.length} en la lista</div><div class="desc">${ops} operador${ops === 1 ? "" : "es"} · ${adm} admin</div></div>
+        <div class="desc" style="margin-top:8px">Quien no esté aquí no puede registrar producción. Agrega a la gente nueva desde la app; se guarda en el Sheet al momento.</div>
+    </div>
+    <button class="btn" onclick="ir('adminPersonas')"><span class="ico">➕</span> Agregar o ver personas <span class="flecha">→</span></button>`;
+}
+function vistaAdminPersonas(){
+    const lista = [...PERSONAS].sort((a, b) => (a.rol === "admin") - (b.rol === "admin") || a.nombre.localeCompare(b.nombre, 'es'));
+    return header("Personas", "Quién puede entrar a la app") + `<main>
+        <div class="seccion-titulo">Agregar persona <small>Entra como operador</small></div>
+        <div class="card">
+            <input id="nuevaPersona" class="selbox" placeholder="Nombre y apellido" value="${escHTML(ESTADO.nuevaPersona || "")}" oninput="ESTADO.nuevaPersona=this.value" autocomplete="off" style="margin-bottom:10px">
+            <button class="btn" style="margin:0" onclick="agregarPersona()"><span class="ico">➕</span> Agregar a la lista <span class="flecha">→</span></button>
+            <div class="desc" style="margin-top:10px">Escríbelo como debe verse en "¿Quién eres?" (nombre y apellido). Se guarda en la pestaña Personas del Sheet y aparece en todas las tablets al momento. Para dar de baja o corregir un nombre, se hace en el Sheet.</div>
+        </div>
+        <div class="seccion-titulo" style="margin-top:20px">En la lista <small>${lista.length} personas</small></div>
+        ${lista.map(p => `
+        <div class="persona" style="cursor:default">
+            <div class="avatar">${inicial(p.nombre)}</div>
+            ${escHTML(p.nombre)}
+            <span class="rol">${p.rol === "admin" ? "Admin" : "Operador"}</span>
+        </div>`).join("")}
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </main>` + tabbarAdmin();
+}
+async function agregarPersona(){
+    const el = document.getElementById("nuevaPersona");
+    const nombre = String(el ? el.value : ESTADO.nuevaPersona || "").replace(/\s+/g, " ").trim();
+    if (nombre.length < 3) { toast("Escribe el nombre completo"); return; }
+    const ya = n => PERSONAS.some(p => p.nombre.toLowerCase() === n.toLowerCase());
+    if (ya(nombre)) { toast(`${nombre} ya está en la lista`); return; }
+    toast("Guardando…");
+    try {
+        await enviarMotor({ action: "agregarPersona", nombre: nombre, por: ESTADO.usuario ? ESTADO.usuario.nombre : "" });
+        await cargarPersonas();                                          // vuelve a leer la pestaña Personas (la respuesta del POST no se puede leer: no-cors)
+    } catch (e) { toast("No se pudo guardar. Revisa el internet."); return; }
+    if (ya(nombre)) { ESTADO.nuevaPersona = ""; render(); toast(`✓ ${nombre} ya puede entrar`); }
+    else toast("No se pudo confirmar. Toca ↻ en un momento.");
 }
 
 
@@ -2481,6 +2584,7 @@ function render() {
         remisionDetalle: vistaRemisionDetalle, historial: vistaHistorial, sesion: vistaSesion,
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking, adminHistorial: vistaAdminHistorial,
         adminRango: vistaAdminRango, adminPersonaDet: vistaAdminPersonaDet,   // 23-oct
+        buscarSku: vistaBuscarSku, adminPersonas: vistaAdminPersonas,         // 13-nov (v41)
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
     const m = $app.querySelector("main"); if (m) m.scrollTop = 0;  // el centro arranca arriba
