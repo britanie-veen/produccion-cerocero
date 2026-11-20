@@ -1133,6 +1133,7 @@ function vistaLoginEquipo() {
         </div>
         <input id="buscar" class="selbox" placeholder="🔍  Busca y marca un nombre…" oninput="dibujarListaEquipo()"
                autocomplete="off" autocorrect="off" style="margin-top:10px">
+        <div class="link" style="margin-top:8px" onclick="ESTADO.altaDesde='loginEquipo';ESTADO.nuevaPersona=(document.getElementById('buscar')||{}).value||'';ir('altaNombre')">➕ Agregar nombre</div>
         <div id="listaEquipo" style="max-height:38vh;overflow-y:auto;padding-right:2px">${equipoHTML("")}</div>
         <button class="btn" style="justify-content:center;margin-top:12px;${n < 2 ? "opacity:.35" : ""}" onclick="entrarEquipo()">
             ${ed ? 'Guardar equipo' : 'Entrar como equipo'}${n ? ` (${n})` : ""} <span class="flecha">→</span>
@@ -1154,7 +1155,7 @@ function equipoHTML(filtro) {
     const lista = [...PERSONAS]
         .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
         .filter(p => p.nombre.toLowerCase().includes(f));
-    if (!lista.length) return sinResultados(filtro, 'loginEquipo');
+    if (!lista.length) return `<p class="vacio">Sin resultados…</p>`;
     return lista.map(p => {
         const on = ESTADO.equipoSel.includes(p.nombre);
         return `<div class="persona" style="${on ? "background:var(--negro);color:var(--blanco)" : ""}" onclick="toggleIntegrante('${p.nombre}')">
@@ -1199,6 +1200,7 @@ function vistaLogin() {
         <p class="sub">Busca y elige tu nombre</p>
         <input id="buscar" class="selbox" placeholder="🔍  Toca aquí y busca tu nombre…" onfocus="abrirLista()"
                oninput="filtrarPersonas()" autocomplete="off" autocorrect="off" style="margin-top:20px">
+        <div class="link" style="margin-top:8px" onclick="ESTADO.altaDesde='login';ESTADO.nuevaPersona=(document.getElementById('buscar')||{}).value||'';ir('altaNombre')">➕ Agregar nombre</div>
         <div id="listaPersonas" style="display:none;max-height:46vh;overflow-y:auto;padding-right:2px"></div>
         <div class="link" onclick="ir('modo')">← Cambiar: ¿individual o en equipo?</div>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
@@ -1231,7 +1233,7 @@ function personasHTML(filtro) {
     const lista = [...PERSONAS]
         .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
         .filter(p => p.nombre.toLowerCase().includes(f));
-    if (!lista.length) return sinResultados(filtro, 'login');
+    if (!lista.length) return `<p class="vacio">Sin resultados…</p>`;
     return lista.map(p => `
         <div class="persona" onclick="entrar('${p.nombre}')">
             <div class="avatar">${inicial(p.nombre)}</div>
