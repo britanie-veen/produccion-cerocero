@@ -677,7 +677,7 @@ async function cargarFirma() {
 }
 async function vigilarCambios() {
     if (!ESTADO.usuario || document.hidden || ESTADO.refrescando) return;
-    if (ESTADO.vista === "producir") return;                  // no mover nada mientras registran
+    if (ESTADO.vista === "producir" || ESTADO.vista === "altaNombre") return;   // no mover nada mientras registran o escriben su nombre (v42)
     let f = null;
     try { const r = await fetch(MOTOR_URL + "?action=firma"); const j = await r.json(); if (j && j.ok) f = j.firma; } catch (e) { return; }
     if (!f) return;
@@ -1134,6 +1134,7 @@ function vistaLoginEquipo() {
         <input id="buscar" class="selbox" placeholder="🔍  Busca y marca un nombre…" oninput="dibujarListaEquipo()"
                autocomplete="off" autocorrect="off" style="margin-top:10px">
         <div id="listaEquipo" style="max-height:38vh;overflow-y:auto;padding-right:2px">${equipoHTML("")}</div>
+        <div class="link" onclick="ESTADO.altaDesde='loginEquipo';ir('altaNombre')">➕ Alguien no está en la lista: agregar su nombre</div>
         <button class="btn" style="justify-content:center;margin-top:12px;${n < 2 ? "opacity:.35" : ""}" onclick="entrarEquipo()">
             ${ed ? 'Guardar equipo' : 'Entrar como equipo'}${n ? ` (${n})` : ""} <span class="flecha">→</span>
         </button>
@@ -1200,7 +1201,25 @@ function vistaLogin() {
         <input id="buscar" class="selbox" placeholder="🔍  Toca aquí y busca tu nombre…" onfocus="abrirLista()"
                oninput="filtrarPersonas()" autocomplete="off" autocorrect="off" style="margin-top:20px">
         <div id="listaPersonas" style="display:none;max-height:46vh;overflow-y:auto;padding-right:2px"></div>
+        <button class="btn" style="justify-content:center;margin-top:12px" onclick="ESTADO.altaDesde='login';ir('altaNombre')"><span class="ico">➕</span> No estoy en la lista, agregar mi nombre</button>
         <div class="link" onclick="ir('modo')">← Cambiar: ¿individual o en equipo?</div>
+        <div class="sello">CERO HUMO · CERO ATAJOS</div>
+    </div>`;
+}
+/* --- 20-nov (v42, Britanie: "no la quiero adentro, la quiero aquí"): AGREGAR MI NOMBRE desde la pantalla de entrada.
+   Cualquiera puede darse de alta; se guarda en la pestaña Personas del Sheet (motor agregarPersona, el mismo de v41)
+   y la persona entra de inmediato como operador. En equipo, vuelve a la lista con el nombre ya marcado. --- */
+function vistaAltaNombre() {
+    const vuelve = ESTADO.altaDesde === 'loginEquipo' ? 'loginEquipo' : 'login';
+    return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
+        <div class="volver" onclick="ir('${vuelve}')"><span>←</span> Regresar</div>
+        <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
+        <h2>Agregar mi nombre</h2>
+        <p class="sub">Escríbelo con nombre y apellido, como quieres que aparezca en la lista</p>
+        <input id="nuevaPersona" class="selbox" placeholder="Nombre y apellido" value="${escHTML(ESTADO.nuevaPersona || "")}"
+               oninput="ESTADO.nuevaPersona=this.value" onkeydown="if(event.key==='Enter')agregarPersona()" autocomplete="off" autocorrect="off" style="margin-top:20px">
+        <button class="btn" style="justify-content:center;margin-top:12px" onclick="agregarPersona()"><span class="ico">➕</span> Guardar y entrar <span class="flecha">→</span></button>
+        <div class="desc" style="margin-top:10px;text-align:center">Se guarda en la pestaña Personas del Sheet y aparece en todas las tablets.</div>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </div>`;
 }
@@ -2142,17 +2161,12 @@ function personasPanelHTML(){
         <div class="item" style="padding:0"><div class="sku">${PERSONAS.length} en la lista</div><div class="desc">${ops} operador${ops === 1 ? "" : "es"} · ${adm} admin</div></div>
         <div class="desc" style="margin-top:8px">Quien no esté aquí no puede registrar producción. Agrega a la gente nueva desde la app; se guarda en el Sheet al momento.</div>
     </div>
-    <button class="btn" onclick="ir('adminPersonas')"><span class="ico">➕</span> Agregar o ver personas <span class="flecha">→</span></button>`;
+    <button class="btn" onclick="ir('adminPersonas')"><span class="ico">👤</span> Ver la lista <span class="flecha">→</span></button>`;
 }
 function vistaAdminPersonas(){
     const lista = [...PERSONAS].sort((a, b) => (a.rol === "admin") - (b.rol === "admin") || a.nombre.localeCompare(b.nombre, 'es'));
     return header("Personas", "Quién puede entrar a la app") + `<main>
-        <div class="seccion-titulo">Agregar persona <small>Entra como operador</small></div>
-        <div class="card">
-            <input id="nuevaPersona" class="selbox" placeholder="Nombre y apellido" value="${escHTML(ESTADO.nuevaPersona || "")}" oninput="ESTADO.nuevaPersona=this.value" autocomplete="off" style="margin-bottom:10px">
-            <button class="btn" style="margin:0" onclick="agregarPersona()"><span class="ico">➕</span> Agregar a la lista <span class="flecha">→</span></button>
-            <div class="desc" style="margin-top:10px">Escríbelo como debe verse en "¿Quién eres?" (nombre y apellido). Se guarda en la pestaña Personas del Sheet y aparece en todas las tablets al momento. Para dar de baja o corregir un nombre, se hace en el Sheet.</div>
-        </div>
+        <div class="desc" style="margin-bottom:10px">Para agregar a alguien: en la pantalla de entrada, botón "➕ No estoy en la lista, agregar mi nombre" (20-nov). Bajas y correcciones: en la pestaña Personas del Sheet.</div>
         <div class="seccion-titulo" style="margin-top:20px">En la lista <small>${lista.length} personas</small></div>
         ${lista.map(p => `
         <div class="persona" style="cursor:default">
@@ -2174,8 +2188,17 @@ async function agregarPersona(){
         await enviarMotor({ action: "agregarPersona", nombre: nombre, por: ESTADO.usuario ? ESTADO.usuario.nombre : "" });
         await cargarPersonas();                                          // vuelve a leer la pestaña Personas (la respuesta del POST no se puede leer: no-cors)
     } catch (e) { toast("No se pudo guardar. Revisa el internet."); return; }
-    if (ya(nombre)) { ESTADO.nuevaPersona = ""; render(); toast(`✓ ${nombre} ya puede entrar`); }
-    else toast("No se pudo confirmar. Toca ↻ en un momento.");
+    if (!ya(nombre)) { toast("No se pudo confirmar. Toca ↻ en un momento."); return; }
+    ESTADO.nuevaPersona = "";
+    if (ESTADO.vista === 'altaNombre') {                                 // 20-nov (v42): alta desde la entrada
+        const real = PERSONAS.find(p => p.nombre.toLowerCase() === nombre.toLowerCase()).nombre;
+        if (ESTADO.altaDesde === 'loginEquipo') {
+            if (!ESTADO.equipoSel.includes(real)) ESTADO.equipoSel.push(real);
+            toast(`✓ ${real} agregado y marcado en el equipo`); ir('loginEquipo');
+        } else { toast(`✓ Listo, ${real}`); entrar(real); }
+        return;
+    }
+    render(); toast(`✓ ${nombre} ya puede entrar`);
 }
 
 
@@ -2585,6 +2608,7 @@ function render() {
         adminPin: vistaAdminPin, adminPanel: vistaAdminPanel, adminPersona: vistaAdminPersona, adminRanking: vistaAdminRanking, adminHistorial: vistaAdminHistorial,
         adminRango: vistaAdminRango, adminPersonaDet: vistaAdminPersonaDet,   // 23-oct
         buscarSku: vistaBuscarSku, adminPersonas: vistaAdminPersonas,         // 13-nov (v41)
+        altaNombre: vistaAltaNombre,                                          // 20-nov (v42)
     };
     $app.innerHTML = (vistas[ESTADO.vista] || vistaLogin)();
     const m = $app.querySelector("main"); if (m) m.scrollTop = 0;  // el centro arranca arriba
