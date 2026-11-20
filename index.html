@@ -1134,7 +1134,6 @@ function vistaLoginEquipo() {
         <input id="buscar" class="selbox" placeholder="🔍  Busca y marca un nombre…" oninput="dibujarListaEquipo()"
                autocomplete="off" autocorrect="off" style="margin-top:10px">
         <div id="listaEquipo" style="max-height:38vh;overflow-y:auto;padding-right:2px">${equipoHTML("")}</div>
-        <div class="link" onclick="ESTADO.altaDesde='loginEquipo';ir('altaNombre')">➕ Alguien no está en la lista: agregar su nombre</div>
         <button class="btn" style="justify-content:center;margin-top:12px;${n < 2 ? "opacity:.35" : ""}" onclick="entrarEquipo()">
             ${ed ? 'Guardar equipo' : 'Entrar como equipo'}${n ? ` (${n})` : ""} <span class="flecha">→</span>
         </button>
@@ -1155,7 +1154,7 @@ function equipoHTML(filtro) {
     const lista = [...PERSONAS]
         .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
         .filter(p => p.nombre.toLowerCase().includes(f));
-    if (!lista.length) return `<p class="vacio">Sin resultados…</p>`;
+    if (!lista.length) return sinResultados(filtro, 'loginEquipo');
     return lista.map(p => {
         const on = ESTADO.equipoSel.includes(p.nombre);
         return `<div class="persona" style="${on ? "background:var(--negro);color:var(--blanco)" : ""}" onclick="toggleIntegrante('${p.nombre}')">
@@ -1201,7 +1200,6 @@ function vistaLogin() {
         <input id="buscar" class="selbox" placeholder="🔍  Toca aquí y busca tu nombre…" onfocus="abrirLista()"
                oninput="filtrarPersonas()" autocomplete="off" autocorrect="off" style="margin-top:20px">
         <div id="listaPersonas" style="display:none;max-height:46vh;overflow-y:auto;padding-right:2px"></div>
-        <button class="btn" style="justify-content:center;margin-top:12px" onclick="ESTADO.altaDesde='login';ir('altaNombre')"><span class="ico">➕</span> No estoy en la lista, agregar mi nombre</button>
         <div class="link" onclick="ir('modo')">← Cambiar: ¿individual o en equipo?</div>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </div>`;
@@ -1209,17 +1207,21 @@ function vistaLogin() {
 /* --- 20-nov (v42, Britanie: "no la quiero adentro, la quiero aquí"): AGREGAR MI NOMBRE desde la pantalla de entrada.
    Cualquiera puede darse de alta; se guarda en la pestaña Personas del Sheet (motor agregarPersona, el mismo de v41)
    y la persona entra de inmediato como operador. En equipo, vuelve a la lista con el nombre ya marcado. --- */
+function sinResultados(filtro, desde) {   // 20-nov (v42): si el nombre no está, la opción de agregarlo sale debajo de la barra
+    const f = (filtro || "").trim();
+    return `<p class="vacio">Sin resultados…</p>
+        <button class="btn" style="justify-content:center;margin-top:6px" onclick="ESTADO.altaDesde='${desde}';ESTADO.nuevaPersona=${JSON.stringify(f)};ir('altaNombre')"><span class="ico">➕</span> Agregar nombre</button>`;
+}
 function vistaAltaNombre() {
     const vuelve = ESTADO.altaDesde === 'loginEquipo' ? 'loginEquipo' : 'login';
     return `<div class="pantalla" style="justify-content:flex-start;padding-top:54px">
         <div class="volver" onclick="ir('${vuelve}')"><span>←</span> Regresar</div>
         <div class="logo00" style="font-size:calc(64px * var(--esc))">00</div>
-        <h2>Agregar mi nombre</h2>
-        <p class="sub">Escríbelo con nombre y apellido, como quieres que aparezca en la lista</p>
+        <h2>Agregar nombre</h2>
+        <p class="sub">Nombre y apellido</p>
         <input id="nuevaPersona" class="selbox" placeholder="Nombre y apellido" value="${escHTML(ESTADO.nuevaPersona || "")}"
                oninput="ESTADO.nuevaPersona=this.value" onkeydown="if(event.key==='Enter')agregarPersona()" autocomplete="off" autocorrect="off" style="margin-top:20px">
-        <button class="btn" style="justify-content:center;margin-top:12px" onclick="agregarPersona()"><span class="ico">➕</span> Guardar y entrar <span class="flecha">→</span></button>
-        <div class="desc" style="margin-top:10px;text-align:center">Se guarda en la pestaña Personas del Sheet y aparece en todas las tablets.</div>
+        <button class="btn" style="justify-content:center;margin-top:12px" onclick="agregarPersona()">Guardar <span class="flecha">→</span></button>
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
     </div>`;
 }
@@ -1229,7 +1231,7 @@ function personasHTML(filtro) {
     const lista = [...PERSONAS]
         .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
         .filter(p => p.nombre.toLowerCase().includes(f));
-    if (!lista.length) return `<p class="vacio">Sin resultados…</p>`;
+    if (!lista.length) return sinResultados(filtro, 'login');
     return lista.map(p => `
         <div class="persona" onclick="entrar('${p.nombre}')">
             <div class="avatar">${inicial(p.nombre)}</div>
