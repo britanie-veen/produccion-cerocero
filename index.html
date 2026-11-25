@@ -415,6 +415,7 @@ let FULL = [];
 // Remisiones de Colecta (S####) — del motor (Odoo). Para la vista "por remisión".
 //    cada una: { name, canal, fecha, lineas:[{sku,nombre,qty}] } (ordenadas FIFO, más antigua primero)
 let COLECTA = [];
+let TERMINADAS = [];   // 25-nov (v45): remisiones que Claudia ya validó HOY en Odoo (pickeadas y terminadas)
 
 // Stock disponible por SKU — de Odoo (SOLO CONSULTA). { sku: piezas }
 let STOCK = {};
@@ -432,7 +433,7 @@ function nombreOdoo(sku, actual){ return String(NOMBRES_ODOO[sku] || actual || s
 function aplicarNombresOdoo(){
     if (!Object.keys(NOMBRES_ODOO).length) return;
     (FULL || []).forEach(f => (f.lineas || []).forEach(l => { l.nombre = nombreOdoo(l.sku, l.nombre); }));
-    (COLECTA || []).forEach(r => (r.lineas || []).forEach(l => { l.nombre = nombreOdoo(l.sku, l.nombre); }));
+    (COLECTA || []).concat(TERMINADAS || []).forEach(r => (r.lineas || []).forEach(l => { l.nombre = nombreOdoo(l.sku, l.nombre); }));
     Object.keys((MACHOTE && MACHOTE.cortes) || {}).forEach(c => (MACHOTE.cortes[c] || []).forEach(it => { it.nombre = nombreOdoo(it.sku, it.nombre); }));
     Object.keys(NOMBRES).forEach(k => { NOMBRES[k] = nombreOdoo(k, NOMBRES[k]); });
 }
@@ -716,7 +717,7 @@ async function cargarColecta() {
     try {
         const r = await fetch(MOTOR_URL + "?action=pendientesColecta");
         const j = await r.json();
-        if (j && j.ok) { COLECTA = j.remisiones || []; aplicarNombresOdoo(); }
+        if (j && j.ok) { COLECTA = j.remisiones || []; TERMINADAS = j.terminadas || []; aplicarNombresOdoo(); }
     } catch (e) { /* sin internet: deja lo que haya */ }
 }
 // Leer el stock disponible por SKU (Odoo, solo consulta).
@@ -1623,7 +1624,7 @@ function verSku(sku, ctx){ ESTADO.skuSel = sku; ESTADO.skuCtx = ctx || null; ir(
 function vistaSkuContexto(sku, ctx){
     const esFull = ctx.tipo === 'FULL';
     const f = esFull ? FULL.find(x => String(x.envio) === String(ctx.ref)) : null;
-    const r = esFull ? null : COLECTA.find(x => String(x.name) === String(ctx.ref));
+    const r = esFull ? null : remisionesTodas().find(x => String(x.name) === String(ctx.ref));   // v45: también las validadas hoy
     const l = esFull ? (f && (f.lineas || []).find(x => x.sku === sku)) : (r && (r.lineas || []).find(x => x.sku === sku));
     const pedido = l ? (esFull ? l.piezas : l.qty) || 0 : 0;
     const regs = REGISTROS_REF.filter(x => x.sku === sku && String(x.ref) === String(ctx.ref) && (x.origen === (esFull ? 'FULL' : 'Colecta') || x.origen === 'Colchón' || x.origen === 'Stock'));   // 23-oct: varios días + stock
@@ -1642,7 +1643,8 @@ function vistaSkuContexto(sku, ctx){
             ${deStock ? `<div class="desc" style="margin-top:8px">📦 <b>${deStock}</b> se tomaron de stock (ya existían, no cuentan como producción) · <b>${Math.max(0, hecho - deStock)}</b> producidas.</div>` : ``}
             <div class="item" style="border:none;padding-top:8px"><div class="desc">En Odoo (stock)</div><div class="cant" style="font-size:calc(14px * var(--esc))">${stockTxt(sku)}</div></div>
         </div>
-        ${(esFull ? f : r) ? `<button class="btn" onclick="${esFull ? `registrarFull('${sku}')` : `registrarRemision('${sku}')`}"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
+        ${(!esFull && r && r.terminada) ? `<p class="vacio" style="padding:0 0 10px;text-align:left">✅ Remisión pickeada y terminada: Claudia ya la validó en Odoo${r.validada ? ` a las ${r.validada}` : ''}. Ya no se le registra producción.</p>` : ``}
+        ${(esFull ? f : (r && !r.terminada)) ? `<button class="btn" onclick="${esFull ? `registrarFull('${sku}')` : `registrarRemision('${sku}')`}"><span class="ico">➕</span> Registrar producción <span class="flecha">→</span></button>
         <button class="btn blanco" onclick="${esFull ? `registrarFull('${sku}', true)` : `registrarRemision('${sku}', true)`}"><span class="ico">📦</span> Tomar de stock <span class="flecha">→</span></button>
         <p class="vacio" style="padding:0 0 10px;text-align:left">Tomar de stock = piezas que ya existían y cubren ${esFull ? 'este envío' : 'esta remisión'}; no suman a la producción de hoy.</p>` : ``}
         <div class="sello">CERO HUMO · CERO ATAJOS</div>
@@ -1687,11 +1689,19 @@ function machoteSet(){
 /* 11-nov (v38, Britanie): una remisión pendiente en Odoo se queda en la lista aunque su SKU ya no venga en el machote de HOY
    (antes se ocultaba al día siguiente si Sofi ya no lo cargaba). Sus líneas son lo que se produce aquí (tapetes y pisos) o lo
    que esté en el machote; el avance cuenta otros días y lo tomado de stock. `deOtroDia` = pedida antes de hoy. */
+/* 25-nov (v45, Britanie): cuando Claudia VALIDA una remisión en Odoo ya no desaparece: pasa a "pickeada y terminada".
+   Para el reparto de piezas se siguen contando TODAS (pendientes + validadas hoy) en el mismo orden de antigüedad; así lo
+   que se produjo para una remisión se queda con ella y no se le acredita a la siguiente que lleve el mismo SKU. */
+function remisionesTodas(){
+    if (!TERMINADAS.length) return COLECTA;
+    const k = r => String(r.orden || r.fecha || '');
+    return COLECTA.concat(TERMINADAS).sort((a, b) => k(a).localeCompare(k(b)) || String(a.name).localeCompare(String(b.name)));
+}
 function remisionesConAvance(){
     const enMachote = machoteSet();
     const restante = {};                         // producido disponible por SKU (se gasta FIFO)
     const hoyISO = fechaISOhoy();
-    return COLECTA.map(r => {                     // COLECTA ya viene FIFO (más antigua primero)
+    return remisionesTodas().map(r => {           // FIFO (más antigua primero); incluye las validadas hoy (v45)
         const prod = (r.lineas||[]).filter(l => enMachote[l.sku] || esPorHacer(l.sku));
         let done = 0;
         const lineas = prod.map(l => {
@@ -1705,6 +1715,7 @@ function remisionesConAvance(){
             return { sku:l.sku, nombre:l.nombre, qty:l.qty, hecho:hecho, listo:listo };
         });
         return { name:r.name, canal:r.canal, fecha: r.fecha || '', deOtroDia: !!(r.fecha && r.fecha < hoyISO),
+                 terminada: !!r.terminada, validada: r.validada || '', otrasStock: r.otrasStock || 0,   // v45
                  lineas:lineas, done:done, total:prod.length,
                  otras:(r.lineas.length - prod.length), completa: prod.length>0 && done===prod.length };
     }).filter(r => r.total > 0);                 // solo remisiones que requieren producción
@@ -1717,9 +1728,27 @@ function hechoRemision(name, sku){
     const l = r && (r.lineas || []).find(x => x.sku === sku);
     return (l ? l.hecho : 0) + extrasDe(sku, name);
 }
-function colectaPorRemision(){
+function colectaPorRemision(){            // v45: pendientes arriba, y abajo las que ya se validaron hoy en Odoo
+    const todas = remisionesConAvance();
+    return colectaPendientesHTML(todas.filter(r => !r.terminada)) + terminadasHTML(todas.filter(r => r.terminada));
+}
+function terminadasHTML(term){
+    if (famFiltro()) term = term.map(r => Object.assign({}, r, { lineas: lineasFiltradas(r.lineas) })).filter(r => r.lineas.length);
+    if (!term.length) return '';
+    return `<div class="seccion-titulo">✅ Pickeadas y terminadas hoy (${term.length})</div>` + term.map(r => {
+        const pedidas = r.lineas.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+        const hechas  = r.lineas.reduce((a, l) => a + Math.min(Number(l.qty) || 0, Number(l.hecho) || 0), 0);
+        return `<div class="card" style="cursor:pointer" onclick="verRemision('${r.name}')">
+            <div class="item" style="padding:0">
+                <div><div class="sku">✅ ${r.name} <span class="chip pend-desde">pickeada y terminada</span></div>
+                     <div class="desc">${r.canal}${r.validada ? ` · validada en Odoo a las ${r.validada}` : ''}${hechas ? ` · ${hechas} registradas en la app` : ''}</div></div>
+                <div class="cant" style="font-size:calc(14px * var(--esc))">${pedidas} pzs ›</div>
+            </div>
+        </div>`;
+    }).join("");
+}
+function colectaPendientesHTML(rems){
     if (!COLECTA.length) return `<p class="vacio">No hay remisiones de Colecta pendientes ahora.</p>`;
-    let rems = remisionesConAvance();
     if (!rems.length) return `<p class="vacio">Ninguna remisión pendiente requiere producción (todo es de stock).</p>`;
     rems = rems.filter(r => !r.completa);        // 11-nov (v38): la cubierta baja de Pendientes (Britanie: "si ya están cubiertas, quítala")
     if (!rems.length) return `<p class="vacio">✅ Todas las remisiones pendientes ya tienen su producción cubierta.</p>`;
@@ -1758,14 +1787,15 @@ function vistaRemisionDetalle(){
     return header(r.name, r.canal) + `<main>
         <div class="card negra">
             <div class="item" style="padding:0">
-                <div class="sku" style="color:#fff">${r.completa?'Producción completa ✅':'Avance de producción'}</div>
-                <div class="cant" style="color:#fff">${r.done}/${r.total}</div>
+                <div class="sku" style="color:#fff">${r.terminada?'Pickeada y terminada ✅':r.completa?'Producción completa ✅':'Avance de producción'}</div>
+                <div class="cant" style="color:#fff">${r.terminada ? '' : `${r.done}/${r.total}`}</div>
             </div>
-            <div class="prog" style="background:rgba(255,255,255,.25)"><span style="width:${Math.round(r.done/r.total*100)}%;background:#fff"></span></div>
-            <div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">Se produce aquí: ${resumenFamTxt(resumenFam(r.lineas, l=>l.qty))}</div>
+            ${r.terminada ? `<div class="desc" style="color:#fff;margin-top:8px">Claudia ya la validó en Odoo${r.validada ? ` a las ${r.validada}` : ''}. Ya salió del almacén; aquí queda lo que se registró para ella.</div>` : ``}
+            ${r.terminada ? `` : `<div class="prog" style="background:rgba(255,255,255,.25)"><span style="width:${Math.round(r.done/r.total*100)}%;background:#fff"></span></div>`}
+            <div class="desc" style="color:rgba(255,255,255,.7);margin-top:8px">${r.terminada ? 'Se producía aquí' : 'Se produce aquí'}: ${resumenFamTxt(resumenFam(r.lineas, l=>l.qty))}</div>
             ${r.otras ? `<div class="desc" style="color:rgba(255,255,255,.7);margin-top:4px">+${r.otras} artículo(s) de stock (no se producen aquí)</div>` : ``}
         </div>
-        <div class="seccion-titulo">Lo que hay que producir para esta remisión</div>
+        <div class="seccion-titulo">${r.terminada ? 'Lo que se registró para esta remisión' : 'Lo que hay que producir para esta remisión'}</div>
         ${famTabsDe(pendPorFam(r.lineas, l=>l.qty, hechoRem))}
         ${!lineasFiltradas(r.lineas).length ? `<p class="vacio">Esta remisión no lleva ${famFiltro().toLowerCase()}.</p>` : ``}
         ${ordenFaltante(lineasFiltradas(r.lineas), l=>l.qty, hechoRem).map(l=>{
@@ -1773,9 +1803,9 @@ function vistaRemisionDetalle(){
             const pct = meta ? Math.min(100, Math.round(h / meta * 100)) : 0;
             return `<div class="card" style="padding:12px 16px;cursor:pointer" onclick="verSku('${l.sku}',{tipo:'Colecta',ref:'${r.name}'})">
                 <div class="item" style="padding:0">
-                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}${extrasTxt(l.sku, r.name)}${deStockTxt(l.sku, r.name)}</div></div>
-                    <div class="cant" style="margin-left:0">${h}/${meta}</div>
-                    ${btnLinea(listo, `registrarRemision('${l.sku}')`)}
+                    <div style="flex:1;min-width:0"><div class="sku">${listo?'✅ ':''}${l.nombre||l.sku}</div><div class="desc">${l.sku}${(r.terminada && h) ? ` · ${Math.min(h, meta)} registradas en la app` : ''}${extrasTxt(l.sku, r.name)}${deStockTxt(l.sku, r.name)}</div></div>
+                    <div class="cant" style="margin-left:0">${r.terminada ? `${meta} pzs` : `${h}/${meta}`}</div>
+                    ${r.terminada ? `` : btnLinea(listo, `registrarRemision('${l.sku}')`)}
                 </div>
                 <div class="prog"><span style="width:${pct}%"></span></div>
             </div>`;
@@ -2053,7 +2083,7 @@ function alertasPanel(d){
         if (sin.length) al.push({ nivel: 'amar', ico: '👤', txt: `${sin.length} sin registro hoy: ${sin.join(', ')}` });
     }
     // (4) remisiones de días anteriores sin cubrir
-    const viejas = remisionesConAvance().filter(r => !r.completa && r.deOtroDia);
+    const viejas = remisionesConAvance().filter(r => !r.completa && !r.terminada && r.deOtroDia);
     if (viejas.length) al.push({ nivel: 'amar', ico: '🧺', txt: `${viejas.length} ${viejas.length === 1 ? 'remisión' : 'remisiones'} de días anteriores sin cubrir: ${viejas.map(r => `${r.name} (${fechaBonita(r.fecha)}, ${r.done}/${r.total})`).join(' · ')}` });
     return al;
 }
@@ -2073,8 +2103,9 @@ function vistaAdminPanel(){
     const pct = totalMeta ? Math.round(totalHecho/totalMeta*100) : 0;
     const personasHoy = new Set(REGISTROS.map(r=>r.persona)).size;
     const rems = remisionesConAvance();
-    const remCompletas = rems.filter(r=>r.completa).length;
-    const remPend = rems.filter(r=>!r.completa), remViejas = remPend.filter(r=>r.deOtroDia).length;   // 11-nov (v38)
+    const remTerm = rems.filter(r=>r.terminada).length;                                             // 25-nov (v45): validadas hoy en Odoo
+    const remCompletas = rems.filter(r=>r.completa || r.terminada).length;
+    const remPend = rems.filter(r=>!r.completa && !r.terminada), remViejas = remPend.filter(r=>r.deOtroDia).length;   // 11-nov (v38)
     const maxDia = SEMANA ? Math.max(1, ...SEMANA.porDia.map(x=>x.piezas)) : 1;
     const colectaHoy = REGISTROS.filter(r=>r.origen!=='FULL' && r.origen!=='Colchón').reduce((a,r)=>a+r.cantidad,0);
     const fullHoy    = REGISTROS.filter(r=>r.origen==='FULL').reduce((a,r)=>a+r.cantidad,0);
@@ -2126,7 +2157,7 @@ function vistaAdminPanel(){
         ${rems.length ? `<div class="card">
             <div class="item" style="padding:0"><div class="sku">Colecta (remisiones)</div><div class="cant">${remCompletas}/${rems.length}</div></div>
             <div class="prog"><span style="width:${Math.round(remCompletas/rems.length*100)}%"></span></div>
-            <div class="desc" style="margin-top:8px">${remCompletas} cubiertas de ${rems.length} que requieren producción${remViejas ? ` · ${remViejas} pendiente${remViejas === 1 ? "" : "s"} de días anteriores` : ""}</div>
+            <div class="desc" style="margin-top:8px">${remCompletas} cubiertas de ${rems.length} que requieren producción${remTerm ? ` · ${remTerm} ya validada${remTerm === 1 ? "" : "s"} en Odoo hoy` : ""}${remViejas ? ` · ${remViejas} pendiente${remViejas === 1 ? "" : "s"} de días anteriores` : ""}</div>
         </div>` : `<p class="vacio">Sin remisiones de colecta que requieran producción.</p>`}`;
     const secFull = FULL.length ? FULL.map(f=>`
             <div class="card"><div class="item" style="padding:0">
